@@ -35,6 +35,7 @@
       <div id="view-login" class="d-none">
         <div class="card shadow-sm mx-auto" style="max-width: 500px;">
           <div class="card-body text-center">
+            <p id="login-session-title" class="text-primary fw-bold mb-2"></p>
             <h3 class="card-title mb-4"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選<rt>えら</rt></ruby>んでね</h3>
             <select id="student-select" class="form-select form-select-lg mb-3">
               <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
@@ -130,13 +131,14 @@
         <div class="card shadow-sm mb-3">
           <div class="card-header bg-success text-white">
             <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> <ruby>振<rt>ふ</rt></ruby>り<ruby>返<rt>かえ</rt></ruby>り</h5>
+            <small id="reflection-session-title" class="text-white-50"></small>
           </div>
           <div class="card-body">
             <!-- BEFOREの自分 -->
             <div class="alert alert-light border mb-3">
               <h6 class="text-muted mb-1"><i class="bi bi-clock-history"></i> <ruby>授業<rt>じゅぎょう</rt></ruby>の<ruby>前<rt>まえ</rt></ruby>の<ruby>自分<rt>じぶん</rt></ruby></h6>
               <div id="reflection-before" class="fw-bold">
-                <span class="text-muted">まだ記録がありません</span>
+                <span class="text-muted">まだ<ruby>記録<rt>きろく</rt></ruby>がありません</span>
               </div>
             </div>
             <!-- AFTERの入力 -->
@@ -166,7 +168,7 @@
             <!-- 変化の理由 -->
             <div class="mb-3">
               <label class="form-label"><ruby>考<rt>かんが</rt></ruby>えはどう<ruby>変<rt>か</rt></ruby>わった？その<ruby>理由<rt>りゆう</rt></ruby>は？</label>
-              <textarea class="form-control" id="reflection-text" rows="4" placeholder="友達の話を聞いて、どう思った？"></textarea>
+              <textarea class="form-control" id="reflection-text" rows="4" placeholder="友だちの話を聞いて、どう思った？"></textarea>
             </div>
 
             <button class="btn btn-success w-100 btn-lg shadow" onclick="submitReflection()">
@@ -256,8 +258,11 @@
               <input type="text" class="form-control form-control-sm" id="opt-tags-list" placeholder="タグをカンマ区切り（例: 共感,疑問,納得,驚き）" value="共感,疑問,納得,驚き">
             </div>
 
+            <!-- アクティブ授業情報 -->
+            <div id="active-session-info" class="mt-4 mb-3"></div>
+
             <!-- フェーズコントロール -->
-            <h6 class="border-bottom pb-2 mt-4">授業フェーズ</h6>
+            <h6 class="border-bottom pb-2">授業フェーズ</h6>
             <div class="d-flex gap-2 mb-3 flex-wrap" id="phase-controls">
               <button class="btn btn-primary" id="btn-phase-BEFORE" onclick="changePhase('BEFORE')">
                 <i class="bi bi-1-circle"></i> 導入（BEFORE）

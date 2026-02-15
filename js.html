@@ -9,6 +9,35 @@ let scatterChart = null;
 let sliderColor = '#1a73e8';
 let loadingTimeout = null;
 let selectedTag = '';
+let currentViewId = '';
+let submittedPhases = new Set(); // 重複送信ガード
+
+/**
+ * Utility: HTMLエスケープ（XSS対策）
+ */
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Utility: 共通タグボタン生成
+ */
+function buildTagButtons(container, tags, onSelect) {
+  container.innerHTML = '';
+  tags.forEach(tag => {
+    const btn = document.createElement('div');
+    btn.className = 'emotion-tag';
+    btn.innerText = tag;
+    btn.onclick = () => onSelect(btn);
+    container.appendChild(btn);
+  });
+}
 
 /**
  * Initialization
@@ -52,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
           currentSession = data.activeSession;
           updatePhaseButtons(currentSession.phase || 'BEFORE');
         }
+        updateActiveSessionInfo();
         renderRoster(data.users);
         initChart();       // チャート準備
         loadScatterData(); // データロード
@@ -80,6 +110,10 @@ document.addEventListener('DOMContentLoaded', () => {
         currentPhase = currentSession.phase || 'BEFORE';
         setupSessionUI(currentSession);
 
+        // ログイン画面に授業タイトルを表示
+        const loginTitle = document.getElementById('login-session-title');
+        if (loginTitle) loginTitle.innerText = currentSession.title;
+
         // フェーズラベル更新
         const phaseLabels = { BEFORE: '今の考えを教えてね', AFTER: '振り返りの時間です' };
         const phaseLabel = document.getElementById('phase-label');
@@ -91,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const storedUid = localStorage.getItem('studentId');
         if (storedUid) {
           currentUser = { id: storedUid };
-          if (currentPhase === 'AFTER') {
+          if (currentPhase === 'AFTER' && !submittedPhases.has('AFTER')) {
             showReflectionView();
           } else {
             showView('view-entry'); // 入力画面へ
@@ -130,18 +164,23 @@ document.addEventListener('DOMContentLoaded', () => {
 function showView(viewId) {
   // すべてのビューを隠す
   const allViews = document.querySelectorAll('[id^="view-"]');
-  allViews.forEach(el => el.classList.add('d-none'));
+  allViews.forEach(el => {
+    el.classList.add('d-none');
+    el.classList.remove('fade-in'); // 前回のアニメーションクラスを除去
+  });
 
   // 指定されたビューを表示
   const target = document.getElementById(viewId);
   if (target) {
     target.classList.remove('d-none');
     target.classList.add('fade-in');
+    currentViewId = viewId;
   } else {
     // 万が一IDが間違っていたら待機画面を出す（ホワイトアウト防止）
     console.warn(`View ID "${viewId}" not found. Fallback to waiting.`);
     const fallback = document.getElementById('view-waiting');
     if(fallback) fallback.classList.remove('d-none');
+    currentViewId = 'view-waiting';
   }
 }
 
@@ -176,15 +215,8 @@ function setupSessionUI(session) {
   } else if (session.inputType === 'TAGS') {
     document.getElementById('input-mode-tags').classList.remove('d-none');
     const container = document.getElementById('tags-container');
-    container.innerHTML = '';
     const tags = session.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-    tags.forEach(tag => {
-      const btn = document.createElement('div');
-      btn.className = 'emotion-tag';
-      btn.innerText = tag;
-      btn.onclick = () => selectTag(btn);
-      container.appendChild(btn);
-    });
+    buildTagButtons(container, tags, selectTag);
   }
 }
 
@@ -209,6 +241,12 @@ function selectTag(el) {
  */
 function submitOpinion() {
   if (!currentUser || !currentSession) return;
+
+  // 重複送信ガード
+  if (submittedPhases.has(currentPhase)) {
+    Swal.fire('もう送ってあるよ', 'この回は送信ずみです', 'info');
+    return;
+  }
 
   const text = document.getElementById('input-text').value;
   let val = 0;
@@ -235,6 +273,8 @@ function submitOpinion() {
 
   runGoogleScript('submitLog', payload)
     .then(() => {
+      submittedPhases.add(currentPhase);
+
       Swal.fire({
         icon: 'success',
         title: '送りました！',
@@ -242,10 +282,17 @@ function submitOpinion() {
         timer: 1500,
         showConfirmButton: false
       });
-      
+
       if (currentSession.inputType === 'SLIDER') {
          const card = document.getElementById('color-match-card');
          if(card) card.classList.remove('d-none');
+      }
+
+      // 送信済み表示
+      const submitBtn = document.querySelector('#view-entry .btn-primary.btn-lg');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="bi bi-check-circle"></i> 送信ずみ';
       }
 
       // フォームリセット
@@ -284,7 +331,7 @@ function toggleTeacherMode() {
       location.reload();
     }
   } else {
-    const pass = prompt('先生用パスワード（デモ: admin）');
+    const pass = prompt('先生用パスワードを入力してください');
     if (pass === 'admin') {
       localStorage.setItem('isTeacher', 'true');
       location.reload(); // リロードして確実に先生モードで起動
@@ -324,10 +371,14 @@ function createNewSession() {
         title: '作成しました',
         text: '生徒に「再読込み」するように伝えてください',
       });
+      // フォームリセット
+      document.getElementById('new-session-title').value = '';
       // セッション情報をリロードして散布図を更新
       runGoogleScript('getInitialData').then(response => {
         if (response && response.success && response.activeSession) {
           currentSession = response.activeSession;
+          updatePhaseButtons(currentSession.phase || 'BEFORE');
+          updateActiveSessionInfo();
           loadScatterData();
         }
       });
@@ -358,6 +409,7 @@ function changePhase(newPhase) {
           .then(() => {
             currentSession = null;
             updatePhaseButtons('CLOSED');
+            updateActiveSessionInfo();
             Swal.fire('授業を終了しました', '', 'success');
           })
           .catch(showError);
@@ -406,6 +458,33 @@ function updatePhaseButtons(phase) {
 }
 
 /**
+ * Active Session Info Display (Teacher)
+ */
+function updateActiveSessionInfo() {
+  const infoEl = document.getElementById('active-session-info');
+  if (!infoEl) return;
+  if (currentSession) {
+    infoEl.innerHTML = `<div class="alert alert-success py-2 mb-0">
+      <i class="bi bi-broadcast"></i> <strong>${escapeHtml(currentSession.title)}</strong>
+      <span class="badge bg-light text-dark ms-2">${escapeHtml(currentSession.inputType)}</span>
+    </div>`;
+    setPhaseControlsEnabled(true);
+  } else {
+    infoEl.innerHTML = `<div class="alert alert-secondary py-2 mb-0">
+      <i class="bi bi-pause-circle"></i> 授業が開始されていません
+    </div>`;
+    setPhaseControlsEnabled(false);
+  }
+}
+
+function setPhaseControlsEnabled(enabled) {
+  ['btn-phase-BEFORE', 'btn-phase-AFTER', 'btn-phase-CLOSED'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !enabled;
+  });
+}
+
+/**
  * Reflection (Student - AFTER Phase)
  */
 function showReflectionView() {
@@ -424,16 +503,13 @@ function showReflectionView() {
   } else if (currentSession.inputType === 'TAGS') {
     tagsDiv.classList.remove('d-none');
     const container = document.getElementById('reflection-tags-container');
-    container.innerHTML = '';
     const tags = currentSession.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-    tags.forEach(tag => {
-      const btn = document.createElement('div');
-      btn.className = 'emotion-tag';
-      btn.innerText = tag;
-      btn.onclick = () => selectReflectionTag(btn);
-      container.appendChild(btn);
-    });
+    buildTagButtons(container, tags, selectReflectionTag);
   }
+
+  // 振り返りヘッダーに授業タイトルを表示
+  const reflectionTitle = document.getElementById('reflection-session-title');
+  if (reflectionTitle) reflectionTitle.innerText = currentSession.title;
 
   // BEFOREの回答を取得して表示
   runGoogleScript('getStudentLogs', currentSession.id, currentUser.id)
@@ -443,12 +519,12 @@ function showReflectionView() {
       if (beforeLog) {
         let display = '';
         if (currentSession.inputType === 'SLIDER') {
-          display = `<div class="mb-1">位置: <span class="badge bg-primary">${beforeLog.value}</span> / 100</div>`;
+          display = `<div class="mb-1">位置: <span class="badge bg-primary">${escapeHtml(beforeLog.value)}</span> / 100</div>`;
         } else if (currentSession.inputType === 'TAGS') {
-          display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${beforeLog.value}</span></div>`;
+          display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${escapeHtml(beforeLog.value)}</span></div>`;
         }
         if (beforeLog.text) {
-          display += `<div class="mt-1">「${beforeLog.text}」</div>`;
+          display += `<div class="mt-1">「${escapeHtml(beforeLog.text)}」</div>`;
         }
         el.innerHTML = display;
       } else {
@@ -478,6 +554,12 @@ function updateReflectionSliderDisplay(val) {
 function submitReflection() {
   if (!currentUser || !currentSession) return;
 
+  // 重複送信ガード
+  if (submittedPhases.has('AFTER')) {
+    Swal.fire('もう送ってあるよ', '振り返りは送信ずみです', 'info');
+    return;
+  }
+
   const text = document.getElementById('reflection-text').value;
   let val = 0;
 
@@ -503,6 +585,8 @@ function submitReflection() {
 
   runGoogleScript('submitLog', payload)
     .then(() => {
+      submittedPhases.add('AFTER');
+
       Swal.fire({
         icon: 'success',
         title: '振り返りを送りました！',
@@ -520,6 +604,8 @@ function submitReflection() {
 function checkPhaseUpdate() {
   if (localStorage.getItem('isTeacher') === 'true') return;
   if (!currentSession) return;
+  // 送信完了・記録閲覧中はポーリング不要
+  if (currentViewId === 'view-done' || currentViewId === 'view-mylog') return;
 
   runGoogleScript('getInitialData')
     .then(response => {
@@ -530,7 +616,7 @@ function checkPhaseUpdate() {
         currentSession.phase = serverPhase;
         currentPhase = serverPhase;
 
-        if (serverPhase === 'AFTER') {
+        if (serverPhase === 'AFTER' && !submittedPhases.has('AFTER')) {
           showReflectionView();
         }
       }
@@ -552,8 +638,8 @@ function renderRoster(users) {
 
   container.innerHTML = users.map(u =>
     `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
-       <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
-       <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
+       <span>${escapeHtml(u.name)} <small class="text-muted">(${escapeHtml(u.ruby)})</small></span>
+       <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${escapeHtml(u.id)}', '${escapeHtml(u.name)}')">
          <i class="bi bi-trash"></i>
        </button>
      </div>`
@@ -763,11 +849,11 @@ function loadStudentSummaries() {
         return;
       }
       container.innerHTML = summaries.map(s => {
-        const before = s.before ? `<span class="badge bg-primary me-1">${s.before.value}</span>${s.before.text || ''}` : '<span class="text-muted">未回答</span>';
-        const after = s.after ? `<span class="badge bg-danger me-1">${s.after.value}</span>${s.after.text || ''}` : '<span class="text-muted">未回答</span>';
+        const before = s.before ? `<span class="badge bg-primary me-1">${escapeHtml(s.before.value)}</span>${escapeHtml(s.before.text || '')}` : '<span class="text-muted">未回答</span>';
+        const after = s.after ? `<span class="badge bg-danger me-1">${escapeHtml(s.after.value)}</span>${escapeHtml(s.after.text || '')}` : '<span class="text-muted">未回答</span>';
         const changed = s.before && s.after && s.before.value !== s.after.value;
         return `<div class="border rounded p-2 mb-2 ${changed ? 'border-warning' : ''}">
-          <div class="fw-bold">${s.name} <small class="text-muted">(${s.ruby})</small> ${changed ? '<span class="badge bg-warning text-dark">変化あり</span>' : ''}</div>
+          <div class="fw-bold">${escapeHtml(s.name)} <small class="text-muted">(${escapeHtml(s.ruby)})</small> ${changed ? '<span class="badge bg-warning text-dark">変化あり</span>' : ''}</div>
           <div class="small mt-1"><span class="text-primary">導入:</span> ${before}</div>
           <div class="small"><span class="text-danger">振り返り:</span> ${after}</div>
         </div>`;
@@ -804,13 +890,13 @@ function showMyLog() {
             const dateStr = s.date ? new Date(s.date).toLocaleDateString('ja-JP') : '';
             let body = '';
             if (beforeLog) {
-              body += `<div class="small"><span class="badge bg-primary">導入</span> ${beforeLog.value || ''} ${beforeLog.text ? '「' + beforeLog.text + '」' : ''}</div>`;
+              body += `<div class="small"><span class="badge bg-primary">導入</span> ${escapeHtml(beforeLog.value || '')} ${beforeLog.text ? '「' + escapeHtml(beforeLog.text) + '」' : ''}</div>`;
             }
             if (afterLog) {
-              body += `<div class="small mt-1"><span class="badge bg-danger">振り返り</span> ${afterLog.value || ''} ${afterLog.text ? '「' + afterLog.text + '」' : ''}</div>`;
+              body += `<div class="small mt-1"><span class="badge bg-danger">振り返り</span> ${escapeHtml(afterLog.value || '')} ${afterLog.text ? '「' + escapeHtml(afterLog.text) + '」' : ''}</div>`;
             }
             return `<div class="card mb-2"><div class="card-body py-2">
-              <div class="fw-bold">${s.title} <small class="text-muted">${dateStr}</small></div>
+              <div class="fw-bold">${escapeHtml(s.title)} <small class="text-muted">${escapeHtml(dateStr)}</small></div>
               ${body}
             </div></div>`;
           }).join('');
