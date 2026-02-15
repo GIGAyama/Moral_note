@@ -1,0 +1,353 @@
+<script>
+/**
+ * Global State
+ */
+let currentUser = null;
+let currentSession = null;
+let currentPhase = 'BEFORE'; // BEFORE, MIDDLE, AFTER
+let scatterChart = null;
+let sliderColor = '#1a73e8';
+let loadingTimeout = null;
+
+/**
+ * Initialization
+ */
+document.addEventListener('DOMContentLoaded', () => {
+  // 1. セーフティネット: 15秒経っても読み込みが終わらない場合は救済ボタンを出す
+  loadingTimeout = setTimeout(() => {
+    const loader = document.getElementById('loading');
+    if (loader && !loader.classList.contains('d-none')) {
+      loader.innerHTML = `
+        <div class="alert alert-warning">
+          <p>読み込みに時間がかかっています。</p>
+          <button class="btn btn-sm btn-outline-dark" onclick="location.reload()">再読み込み</button>
+        </div>`;
+    }
+  }, 15000);
+
+  // 2. 先生モード判定（最優先）
+  const isTeacher = localStorage.getItem('isTeacher') === 'true';
+  if (isTeacher) {
+    showView('view-teacher'); // 先に画面を出しておく
+  }
+
+  // 3. データ取得開始
+  runGoogleScript('getInitialData')
+    .then(response => {
+      // タイムアウト解除
+      clearTimeout(loadingTimeout);
+      document.getElementById('loading').classList.add('d-none');
+      
+      // レスポンス検証
+      if (!response || !response.success) {
+        throw new Error(response ? response.error : 'データ取得失敗');
+      }
+
+      const data = response;
+
+      // 先生ならここで処理終了（生徒用ロジックには行かせない）
+      if (isTeacher) {
+        if (data.activeSession) currentSession = data.activeSession;
+        initChart();      // チャート準備
+        loadScatterData(); // データロード
+        return;           // ★重要: ここでリターンして生徒ロジックを遮断
+      }
+
+      // --- 以下、生徒用ロジック ---
+
+      // 名簿セット
+      const select = document.getElementById('student-select');
+      if (data.users && Array.isArray(data.users) && data.users.length > 0) {
+        // 既存の選択肢をクリア
+        select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
+        data.users.forEach(u => {
+          const option = document.createElement('option');
+          option.value = u.id;
+          option.innerHTML = `${u.name} <small>(${u.ruby})</small>`;
+          select.appendChild(option);
+        });
+      }
+
+      // セッション状態による分岐
+      if (data.activeSession) {
+        currentSession = data.activeSession;
+        setupSessionUI(currentSession);
+        
+        // ログイン済みかチェック
+        const storedUid = localStorage.getItem('studentId');
+        if (storedUid) {
+          currentUser = { id: storedUid };
+          showView('view-entry'); // 入力画面へ
+        } else {
+          showView('view-login'); // ログイン画面へ
+        }
+      } else {
+        // セッションがない場合
+        showView('view-waiting');
+      }
+    })
+    .catch(err => {
+      clearTimeout(loadingTimeout);
+      document.getElementById('loading').classList.add('d-none');
+      console.error(err);
+      
+      // エラーが出てもホワイトアウトさせず、エラー表示をする
+      Swal.fire({
+        icon: 'error',
+        title: '通信エラー',
+        text: 'データの読み込みに失敗しました。再読み込みしますか？',
+        showCancelButton: true,
+        confirmButtonText: '再読み込み',
+      }).then((result) => {
+        if (result.isConfirmed) {
+          location.reload();
+        }
+      });
+    });
+});
+
+/**
+ * UI Logic (Safe Transition)
+ */
+function showView(viewId) {
+  // すべてのビューを隠す
+  const allViews = document.querySelectorAll('[id^="view-"]');
+  allViews.forEach(el => el.classList.add('d-none'));
+
+  // 指定されたビューを表示
+  const target = document.getElementById(viewId);
+  if (target) {
+    target.classList.remove('d-none');
+    target.classList.add('fade-in');
+  } else {
+    // 万が一IDが間違っていたら待機画面を出す（ホワイトアウト防止）
+    console.warn(`View ID "${viewId}" not found. Fallback to waiting.`);
+    const fallback = document.getElementById('view-waiting');
+    if(fallback) fallback.classList.remove('d-none');
+  }
+}
+
+function login() {
+  const select = document.getElementById('student-select');
+  const uid = select.value;
+  if (!uid) {
+    Swal.fire('名前を選んでね', '', 'warning');
+    return;
+  }
+  
+  localStorage.setItem('studentId', uid);
+  currentUser = { id: uid };
+  showView('view-entry');
+}
+
+function setupSessionUI(session) {
+  const titleEl = document.getElementById('session-title');
+  if(titleEl) titleEl.innerText = session.title;
+  
+  // UIリセット
+  document.getElementById('input-mode-slider').classList.add('d-none');
+  document.getElementById('input-mode-tags').classList.add('d-none');
+
+  // 入力モード切替
+  if (session.inputType === 'SLIDER') {
+    document.getElementById('input-mode-slider').classList.remove('d-none');
+    document.getElementById('slider-label-min').innerText = session.options.minLabel || 'A';
+    document.getElementById('slider-label-max').innerText = session.options.maxLabel || 'B';
+  } else if (session.inputType === 'TAGS') {
+    document.getElementById('input-mode-tags').classList.remove('d-none');
+    const container = document.getElementById('tags-container');
+    container.innerHTML = '';
+    const tags = session.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
+    tags.forEach(tag => {
+      const btn = document.createElement('div');
+      btn.className = 'emotion-tag';
+      btn.innerText = tag;
+      btn.onclick = () => selectTag(btn);
+      container.appendChild(btn);
+    });
+  }
+}
+
+function updateSliderColor(val) {
+  document.getElementById('slider-value-display').innerText = val;
+  const r = Math.floor(255 * (100 - val) / 100);
+  const b = Math.floor(255 * val / 100);
+  sliderColor = `rgb(${r}, 50, ${b})`;
+  
+  const bg = document.getElementById('color-match-bg');
+  if(bg) bg.style.backgroundColor = `rgba(${r}, 50, ${b}, 0.2)`;
+}
+
+function selectTag(el) {
+  document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  const input = document.getElementById('input-text');
+  input.value += (input.value ? ' ' : '') + `【${el.innerText}】`;
+}
+
+/**
+ * Action: 送信
+ */
+function submitOpinion() {
+  if (!currentUser || !currentSession) return;
+
+  const text = document.getElementById('input-text').value;
+  let val = 0;
+  
+  if (currentSession.inputType === 'SLIDER') {
+    val = document.getElementById('input-slider').value;
+  }
+
+  const payload = {
+    sessionId: currentSession.id,
+    studentId: currentUser.id,
+    phase: currentPhase,
+    value: val,
+    text: text
+  };
+
+  Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+
+  runGoogleScript('submitLog', payload)
+    .then(() => {
+      Swal.fire({
+        icon: 'success',
+        title: '送りました！',
+        text: '友達の意見を聞いてみよう',
+        timer: 1500,
+        showConfirmButton: false
+      });
+      
+      if (currentSession.inputType === 'SLIDER') {
+         const card = document.getElementById('color-match-card');
+         if(card) card.classList.remove('d-none');
+      }
+    })
+    .catch(showError);
+}
+
+/**
+ * Teacher Functions
+ */
+function toggleTeacherMode() {
+  const isT = localStorage.getItem('isTeacher') === 'true';
+  if (isT) {
+    if(confirm('先生モードを終了しますか？')) {
+      localStorage.removeItem('isTeacher');
+      location.reload();
+    }
+  } else {
+    const pass = prompt('先生用パスワード（デモ: admin）');
+    if (pass === 'admin') {
+      localStorage.setItem('isTeacher', 'true');
+      location.reload(); // リロードして確実に先生モードで起動
+    }
+  }
+}
+
+function createNewSession() {
+  const title = document.getElementById('new-session-title').value;
+  if (!title) { Swal.fire('タイトルを入れてね', '', 'warning'); return; }
+
+  const type = document.getElementById('new-session-type').value;
+  let options = {};
+  
+  if (type === 'SLIDER') {
+    options = { minLabel: '賛成', maxLabel: '反対', tags: [] };
+  } else if (type === 'TAGS') {
+    options = { tags: ['共感', '疑問', '納得', '驚き'] };
+  }
+
+  Swal.fire({ title: '授業を作成中...', didOpen: () => Swal.showLoading() });
+
+  runGoogleScript('createSession', title, type, JSON.stringify(options))
+    .then(() => {
+      Swal.fire({
+        icon: 'success',
+        title: '作成しました',
+        text: '生徒に「再読込み」するように伝えてください',
+      });
+    })
+    .catch(showError);
+}
+
+/**
+ * Chart.js Logic
+ */
+function initChart() {
+  const ctx = document.getElementById('scatterChart').getContext('2d');
+  scatterChart = new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [{
+        label: 'クラスの分布',
+        data: [],
+        backgroundColor: 'rgba(26, 115, 232, 0.6)'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
+        y: { display: false }
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: function(context) {
+              return context.raw.text ? `「${context.raw.text.substring(0,20)}...」` : '';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function loadScatterData() {
+  if (!currentSession) return;
+  
+  runGoogleScript('getSessionLogs', currentSession.id)
+    .then(logs => {
+      if(scatterChart) {
+        const plotData = logs.map(l => ({
+          x: l.value,
+          y: Math.random() * 10,
+          text: l.text
+        }));
+        scatterChart.data.datasets[0].data = plotData;
+        scatterChart.update();
+      }
+    })
+    .catch(console.error); // ポーリングエラーは静かに無視
+}
+
+// ポーリング開始
+setInterval(() => {
+  if (localStorage.getItem('isTeacher') === 'true' && currentSession) {
+    loadScatterData();
+  }
+}, 5000);
+
+/**
+ * GAS Wrapper (GIGA Standard)
+ */
+function runGoogleScript(funcName, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)
+      [funcName](...args);
+  });
+}
+
+function showError(err) {
+  console.error(err);
+  Swal.fire({
+    icon: 'error',
+    title: 'エラー',
+    text: '通信に失敗しました: ' + err.toString()
+  });
+}
+</script>
