@@ -1,5 +1,5 @@
 /**
- * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v1.2)
+ * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v1.3)
  * GIGA Standard v2 Compliant
  */
 
@@ -114,11 +114,11 @@ function setupSheets(ss) {
   let sessionSheet = ss.getSheetByName('授業');
   if (!sessionSheet) {
     sessionSheet = ss.insertSheet('授業');
-    sessionSheet.getRange(1, 1, 1, 7).setValues([['sessionId', 'date', 'title', 'inputType', 'options', 'status', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
+    sessionSheet.getRange(1, 1, 1, 8).setValues([['sessionId', 'date', 'title', 'inputType', 'options', 'status', 'phase', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
     // デモセッション
     const demoOptions = JSON.stringify({minLabel: '正直に言う', maxLabel: '黙っている', tags: ['葛藤', '不安', '決意']});
-    sessionSheet.getRange(2, 1, 1, 7).setValues([
-      ['demo_01', new Date(), '正直な心（デモ）', 'SLIDER', demoOptions, 'ACTIVE', '']
+    sessionSheet.getRange(2, 1, 1, 8).setValues([
+      ['demo_01', new Date(), '正直な心（デモ）', 'SLIDER', demoOptions, 'ACTIVE', 'BEFORE', '']
     ]);
   }
 
@@ -162,18 +162,19 @@ function getInitialData() {
     let activeSession = null;
     if (sessionSheet && sessionSheet.getLastRow() > 1) {
       const sessions = sessionSheet.getDataRange().getValues().slice(1)
-        .filter(r => r[5] === 'ACTIVE' && !r[6])
+        .filter(r => r[5] === 'ACTIVE' && !r[7])
         .map(r => {
            // JSONパースの安全策
            let opts = {};
            try { opts = r[4] ? JSON.parse(r[4]) : {}; } catch(e) { console.warn('JSON Parse Error', e); }
-           
+
            return {
              id: r[0],
              date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]), // 日付を文字列化(重要)
              title: r[2],
              inputType: r[3],
-             options: opts
+             options: opts,
+             phase: r[6] || 'BEFORE'
            };
         });
       if (sessions.length > 0) activeSession = sessions[0];
@@ -253,10 +254,93 @@ function createSession(title, inputType, optionsJson) {
     inputType,
     optionsJson,
     'ACTIVE',
+    'BEFORE',
     ''
   ]);
   
   return { success: true };
+}
+
+/**
+ * 授業を終了する（ACTIVE→CLOSED）
+ */
+function closeSession(sessionId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
+      sheet.getRange(i + 1, 6).setValue('CLOSED');
+      return { success: true };
+    }
+  }
+  return { success: false, error: 'セッションが見つかりません' };
+}
+
+/**
+ * フェーズ変更（教師用）
+ */
+function updateSessionPhase(sessionId, newPhase) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
+      sheet.getRange(i + 1, 7).setValue(newPhase);
+      return { success: true, phase: newPhase };
+    }
+  }
+  return { success: false, error: 'セッションが見つかりません' };
+}
+
+/**
+ * 特定生徒の授業ログ取得（振り返り用）
+ */
+function getStudentLogs(sessionId, studentId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('記録');
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  const rawData = sheet.getDataRange().getValues();
+
+  return rawData.slice(1)
+    .filter(r => r[1] === sessionId && r[2] === studentId && !r[7])
+    .map(r => ({
+      phase: r[3],
+      value: r[4],
+      text: r[5],
+      timestamp: r[6] instanceof Date ? r[6].toISOString() : String(r[6])
+    }));
+}
+
+/**
+ * 名簿に生徒を追加
+ */
+function addStudent(name, ruby) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
+  sheet.appendRow([studentId, name, ruby, '']);
+  return { success: true, id: studentId };
+}
+
+/**
+ * 名簿から生徒を削除（論理削除）
+ */
+function deleteStudent(studentId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === studentId) {
+      sheet.getRange(i + 1, 4).setValue(new Date());
+      return { success: true };
+    }
+  }
+  return { success: false, error: '生徒が見つかりません' };
 }
 
 /**

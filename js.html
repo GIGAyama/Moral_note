@@ -8,6 +8,7 @@ let currentPhase = 'BEFORE'; // BEFORE, MIDDLE, AFTER
 let scatterChart = null;
 let sliderColor = '#1a73e8';
 let loadingTimeout = null;
+let selectedTag = '';
 
 /**
  * Initialization
@@ -47,7 +48,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 先生ならここで処理終了（生徒用ロジックには行かせない）
       if (isTeacher) {
-        if (data.activeSession) currentSession = data.activeSession;
+        if (data.activeSession) {
+          currentSession = data.activeSession;
+          updatePhaseButtons(currentSession.phase || 'BEFORE');
+        }
+        renderRoster(data.users);
         initChart();      // チャート準備
         loadScatterData(); // データロード
         return;           // ★重要: ここでリターンして生徒ロジックを遮断
@@ -71,13 +76,25 @@ document.addEventListener('DOMContentLoaded', () => {
       // セッション状態による分岐
       if (data.activeSession) {
         currentSession = data.activeSession;
+        currentPhase = currentSession.phase || 'BEFORE';
         setupSessionUI(currentSession);
-        
+
+        // フェーズラベル更新
+        const phaseLabels = { BEFORE: '今の考えを教えてね', AFTER: '振り返りの時間です' };
+        const phaseLabel = document.getElementById('phase-label');
+        if (phaseLabel && phaseLabels[currentPhase]) {
+          phaseLabel.innerHTML = phaseLabels[currentPhase];
+        }
+
         // ログイン済みかチェック
         const storedUid = localStorage.getItem('studentId');
         if (storedUid) {
           currentUser = { id: storedUid };
-          showView('view-entry'); // 入力画面へ
+          if (currentPhase === 'AFTER') {
+            showReflectionView();
+          } else {
+            showView('view-entry'); // 入力画面へ
+          }
         } else {
           showView('view-login'); // ログイン画面へ
         }
@@ -153,6 +170,8 @@ function setupSessionUI(session) {
     document.getElementById('input-mode-slider').classList.remove('d-none');
     document.getElementById('slider-label-min').innerText = session.options.minLabel || 'A';
     document.getElementById('slider-label-max').innerText = session.options.maxLabel || 'B';
+    // 初期カラー設定
+    updateSliderColor(document.getElementById('input-slider').value);
   } else if (session.inputType === 'TAGS') {
     document.getElementById('input-mode-tags').classList.remove('d-none');
     const container = document.getElementById('tags-container');
@@ -181,8 +200,7 @@ function updateSliderColor(val) {
 function selectTag(el) {
   document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
   el.classList.add('active');
-  const input = document.getElementById('input-text');
-  input.value += (input.value ? ' ' : '') + `【${el.innerText}】`;
+  selectedTag = el.innerText;
 }
 
 /**
@@ -193,9 +211,15 @@ function submitOpinion() {
 
   const text = document.getElementById('input-text').value;
   let val = 0;
-  
+
   if (currentSession.inputType === 'SLIDER') {
-    val = document.getElementById('input-slider').value;
+    val = Number(document.getElementById('input-slider').value);
+  } else if (currentSession.inputType === 'TAGS') {
+    if (!selectedTag) {
+      Swal.fire('気持ちを選んでね', '', 'warning');
+      return;
+    }
+    val = selectedTag;
   }
 
   const payload = {
@@ -222,6 +246,11 @@ function submitOpinion() {
          const card = document.getElementById('color-match-card');
          if(card) card.classList.remove('d-none');
       }
+
+      // フォームリセット
+      document.getElementById('input-text').value = '';
+      selectedTag = '';
+      document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
     })
     .catch(showError);
 }
@@ -229,6 +258,17 @@ function submitOpinion() {
 /**
  * Teacher Functions
  */
+function logoutTeacher() {
+  localStorage.removeItem('isTeacher');
+  location.reload();
+}
+
+function logoutStudent() {
+  localStorage.removeItem('studentId');
+  currentUser = null;
+  showView('view-login');
+}
+
 function toggleTeacherMode() {
   const isT = localStorage.getItem('isTeacher') === 'true';
   if (isT) {
@@ -267,8 +307,292 @@ function createNewSession() {
         title: '作成しました',
         text: '生徒に「再読込み」するように伝えてください',
       });
+      // セッション情報をリロードして散布図を更新
+      runGoogleScript('getInitialData').then(response => {
+        if (response && response.success && response.activeSession) {
+          currentSession = response.activeSession;
+          loadScatterData();
+        }
+      });
     })
     .catch(showError);
+}
+
+/**
+ * Phase Management (Teacher)
+ */
+function changePhase(newPhase) {
+  if (!currentSession) {
+    Swal.fire('授業が選択されていません', '', 'warning');
+    return;
+  }
+
+  if (newPhase === 'CLOSED') {
+    Swal.fire({
+      title: '授業を終了しますか？',
+      text: '生徒は入力できなくなります',
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: '終了する',
+      cancelButtonText: 'キャンセル'
+    }).then(result => {
+      if (result.isConfirmed) {
+        runGoogleScript('closeSession', currentSession.id)
+          .then(() => {
+            currentSession = null;
+            updatePhaseButtons('CLOSED');
+            Swal.fire('授業を終了しました', '', 'success');
+          })
+          .catch(showError);
+      }
+    });
+    return;
+  }
+
+  Swal.fire({ title: 'フェーズ変更中...', didOpen: () => Swal.showLoading() });
+
+  runGoogleScript('updateSessionPhase', currentSession.id, newPhase)
+    .then(result => {
+      if (result && result.success) {
+        currentSession.phase = newPhase;
+        updatePhaseButtons(newPhase);
+        Swal.fire({
+          icon: 'success',
+          title: 'フェーズ変更完了',
+          text: newPhase === 'BEFORE' ? '導入フェーズです' : '振り返りフェーズです',
+          timer: 1500,
+          showConfirmButton: false
+        });
+      }
+    })
+    .catch(showError);
+}
+
+function updatePhaseButtons(phase) {
+  const phases = ['BEFORE', 'AFTER', 'CLOSED'];
+  phases.forEach(p => {
+    const btn = document.getElementById('btn-phase-' + p);
+    if (!btn) return;
+    if (p === phase) {
+      btn.classList.remove('btn-outline-secondary', 'btn-outline-danger');
+      btn.classList.add(p === 'CLOSED' ? 'btn-danger' : 'btn-primary');
+    } else {
+      btn.classList.remove('btn-primary', 'btn-danger');
+      btn.classList.add(p === 'CLOSED' ? 'btn-outline-danger' : 'btn-outline-secondary');
+    }
+  });
+  const display = document.getElementById('current-phase-display');
+  if (display) {
+    const labels = { BEFORE: '導入（BEFORE）', AFTER: '振り返り（AFTER）', CLOSED: '終了' };
+    display.innerText = labels[phase] || phase;
+  }
+}
+
+/**
+ * Reflection (Student - AFTER Phase)
+ */
+function showReflectionView() {
+  if (!currentSession || !currentUser) return;
+
+  // セッションの入力モードに応じたUI表示
+  const sliderDiv = document.getElementById('reflection-input-slider');
+  const tagsDiv = document.getElementById('reflection-input-tags');
+  sliderDiv.classList.add('d-none');
+  tagsDiv.classList.add('d-none');
+
+  if (currentSession.inputType === 'SLIDER') {
+    sliderDiv.classList.remove('d-none');
+    document.getElementById('reflection-slider-label-min').innerText = currentSession.options.minLabel || 'A';
+    document.getElementById('reflection-slider-label-max').innerText = currentSession.options.maxLabel || 'B';
+  } else if (currentSession.inputType === 'TAGS') {
+    tagsDiv.classList.remove('d-none');
+    const container = document.getElementById('reflection-tags-container');
+    container.innerHTML = '';
+    const tags = currentSession.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
+    tags.forEach(tag => {
+      const btn = document.createElement('div');
+      btn.className = 'emotion-tag';
+      btn.innerText = tag;
+      btn.onclick = () => selectReflectionTag(btn);
+      container.appendChild(btn);
+    });
+  }
+
+  // BEFOREの回答を取得して表示
+  runGoogleScript('getStudentLogs', currentSession.id, currentUser.id)
+    .then(logs => {
+      const beforeLog = logs.find(l => l.phase === 'BEFORE');
+      const el = document.getElementById('reflection-before');
+      if (beforeLog) {
+        let display = '';
+        if (currentSession.inputType === 'SLIDER') {
+          display = `<div class="mb-1">位置: <span class="badge bg-primary">${beforeLog.value}</span> / 100</div>`;
+        } else if (currentSession.inputType === 'TAGS') {
+          display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${beforeLog.value}</span></div>`;
+        }
+        if (beforeLog.text) {
+          display += `<div class="mt-1">「${beforeLog.text}」</div>`;
+        }
+        el.innerHTML = display;
+      } else {
+        el.innerHTML = '<span class="text-muted">導入時の記録がありません</span>';
+      }
+    })
+    .catch(err => {
+      console.error(err);
+      document.getElementById('reflection-before').innerHTML = '<span class="text-muted">読み込みに失敗しました</span>';
+    });
+
+  showView('view-reflection');
+}
+
+let selectedReflectionTag = '';
+
+function selectReflectionTag(el) {
+  document.querySelectorAll('#reflection-tags-container .emotion-tag').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  selectedReflectionTag = el.innerText;
+}
+
+function updateReflectionSliderDisplay(val) {
+  document.getElementById('reflection-slider-value').innerText = val;
+}
+
+function submitReflection() {
+  if (!currentUser || !currentSession) return;
+
+  const text = document.getElementById('reflection-text').value;
+  let val = 0;
+
+  if (currentSession.inputType === 'SLIDER') {
+    val = Number(document.getElementById('reflection-slider').value);
+  } else if (currentSession.inputType === 'TAGS') {
+    if (!selectedReflectionTag) {
+      Swal.fire('気持ちを選んでね', '', 'warning');
+      return;
+    }
+    val = selectedReflectionTag;
+  }
+
+  const payload = {
+    sessionId: currentSession.id,
+    studentId: currentUser.id,
+    phase: 'AFTER',
+    value: val,
+    text: text
+  };
+
+  Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+
+  runGoogleScript('submitLog', payload)
+    .then(() => {
+      Swal.fire({
+        icon: 'success',
+        title: '振り返りを送りました！',
+        timer: 1500,
+        showConfirmButton: false
+      });
+      showView('view-done');
+    })
+    .catch(showError);
+}
+
+/**
+ * Student Phase Polling
+ */
+function checkPhaseUpdate() {
+  if (localStorage.getItem('isTeacher') === 'true') return;
+  if (!currentSession) return;
+
+  runGoogleScript('getInitialData')
+    .then(response => {
+      if (!response || !response.success || !response.activeSession) return;
+
+      const serverPhase = response.activeSession.phase;
+      if (serverPhase !== currentSession.phase) {
+        currentSession.phase = serverPhase;
+        currentPhase = serverPhase;
+
+        if (serverPhase === 'AFTER') {
+          showReflectionView();
+        }
+      }
+    })
+    .catch(() => {}); // ポーリングエラーは静かに無視
+}
+
+/**
+ * Roster Management (Teacher)
+ */
+function renderRoster(users) {
+  const container = document.getElementById('roster-list');
+  if (!container) return;
+
+  if (!users || users.length === 0) {
+    container.innerHTML = '<p class="text-muted small">名簿が空です</p>';
+    return;
+  }
+
+  container.innerHTML = users.map(u =>
+    `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
+       <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
+       <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
+         <i class="bi bi-trash"></i>
+       </button>
+     </div>`
+  ).join('');
+}
+
+function addNewStudent() {
+  const name = document.getElementById('new-student-name').value.trim();
+  const ruby = document.getElementById('new-student-ruby').value.trim();
+  if (!name) {
+    Swal.fire('名前を入力してください', '', 'warning');
+    return;
+  }
+
+  Swal.fire({ title: '追加中...', didOpen: () => Swal.showLoading() });
+
+  runGoogleScript('addStudent', name, ruby || '')
+    .then(result => {
+      if (result && result.success) {
+        document.getElementById('new-student-name').value = '';
+        document.getElementById('new-student-ruby').value = '';
+        Swal.fire({ icon: 'success', title: '追加しました', timer: 1000, showConfirmButton: false });
+        // 名簿を再読込
+        reloadRoster();
+      }
+    })
+    .catch(showError);
+}
+
+function removeStudent(studentId, name) {
+  Swal.fire({
+    title: `${name} を削除しますか？`,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonText: '削除',
+    cancelButtonText: 'キャンセル'
+  }).then(result => {
+    if (result.isConfirmed) {
+      runGoogleScript('deleteStudent', studentId)
+        .then(() => {
+          Swal.fire({ icon: 'success', title: '削除しました', timer: 1000, showConfirmButton: false });
+          reloadRoster();
+        })
+        .catch(showError);
+    }
+  });
+}
+
+function reloadRoster() {
+  runGoogleScript('getInitialData')
+    .then(response => {
+      if (response && response.success) {
+        renderRoster(response.users);
+      }
+    })
+    .catch(console.error);
 }
 
 /**
@@ -323,10 +647,12 @@ function loadScatterData() {
     .catch(console.error); // ポーリングエラーは静かに無視
 }
 
-// ポーリング開始
+// ポーリング開始（教師: 散布図更新 / 生徒: フェーズ変更検知）
 setInterval(() => {
   if (localStorage.getItem('isTeacher') === 'true' && currentSession) {
     loadScatterData();
+  } else {
+    checkPhaseUpdate();
   }
 }, 5000);
 

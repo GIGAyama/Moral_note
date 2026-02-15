@@ -100,6 +100,11 @@
             <button class="btn btn-primary w-100 btn-lg shadow" onclick="submitOpinion()">
               <i class="bi bi-send"></i> <ruby>送信<rt>そうしん</rt></ruby>する
             </button>
+            <div class="text-center mt-3">
+              <a href="#" class="text-muted small" onclick="logoutStudent(); return false;">
+                <i class="bi bi-arrow-left"></i> <ruby>名前<rt>なまえ</rt></ruby>を<ruby>変<rt>か</rt></ruby>える
+              </a>
+            </div>
           </div>
         </div>
 
@@ -112,12 +117,79 @@
         </div>
       </div>
 
+      <!-- View: 振り返り (Reflection) -->
+      <div id="view-reflection" class="d-none">
+        <div class="card shadow-sm mb-3">
+          <div class="card-header bg-success text-white">
+            <h5 class="mb-0"><i class="bi bi-arrow-repeat"></i> <ruby>振<rt>ふ</rt></ruby>り<ruby>返<rt>かえ</rt></ruby>り</h5>
+          </div>
+          <div class="card-body">
+            <!-- BEFOREの自分 -->
+            <div class="alert alert-light border mb-3">
+              <h6 class="text-muted mb-1"><i class="bi bi-clock-history"></i> <ruby>授業<rt>じゅぎょう</rt></ruby>の<ruby>前<rt>まえ</rt></ruby>の<ruby>自分<rt>じぶん</rt></ruby></h6>
+              <div id="reflection-before" class="fw-bold">
+                <span class="text-muted">まだ記録がありません</span>
+              </div>
+            </div>
+            <!-- AFTERの入力 -->
+            <div class="alert alert-info border mb-3">
+              <h6 class="mb-1"><i class="bi bi-pencil-square"></i> <ruby>今<rt>いま</rt></ruby>の<ruby>考<rt>かんが</rt></ruby>え</h6>
+            </div>
+
+            <!-- 入力フォーム: Slider Mode (振り返り用) -->
+            <div id="reflection-input-slider" class="d-none">
+              <div class="d-flex justify-content-between mb-2">
+                <span class="badge bg-secondary text-wrap" style="width: 45%;" id="reflection-slider-label-min">A</span>
+                <span class="badge bg-secondary text-wrap" style="width: 45%;" id="reflection-slider-label-max">B</span>
+              </div>
+              <input type="range" class="form-range custom-range py-3" min="0" max="100" step="1" id="reflection-slider" oninput="updateReflectionSliderDisplay(this.value)">
+              <div class="text-center mb-3">
+                <span id="reflection-slider-value" class="fw-bold h4">50</span>
+              </div>
+            </div>
+
+            <!-- 入力フォーム: Tags Mode (振り返り用) -->
+            <div id="reflection-input-tags" class="d-none mb-3">
+              <div id="reflection-tags-container" class="d-flex flex-wrap gap-2">
+                <!-- JSで生成 -->
+              </div>
+            </div>
+
+            <!-- 変化の理由 -->
+            <div class="mb-3">
+              <label class="form-label"><ruby>考<rt>かんが</rt></ruby>えはどう<ruby>変<rt>か</rt></ruby>わった？その<ruby>理由<rt>りゆう</rt></ruby>は？</label>
+              <textarea class="form-control" id="reflection-text" rows="4" placeholder="友達の話を聞いて、どう思った？"></textarea>
+            </div>
+
+            <button class="btn btn-success w-100 btn-lg shadow" onclick="submitReflection()">
+              <i class="bi bi-send"></i> <ruby>振<rt>ふ</rt></ruby>り<ruby>返<rt>かえ</rt></ruby>りを<ruby>送信<rt>そうしん</rt></ruby>する
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- View: 送信完了 -->
+      <div id="view-done" class="d-none text-center mt-5">
+        <div class="card shadow-sm mx-auto" style="max-width: 500px;">
+          <div class="card-body py-5">
+            <i class="bi bi-check-circle text-success" style="font-size: 4rem;"></i>
+            <h3 class="mt-3"><ruby>送信<rt>そうしん</rt></ruby><ruby>完了<rt>かんりょう</rt></ruby>！</h3>
+            <p class="text-muted"><ruby>先生<rt>せんせい</rt></ruby>の<ruby>指示<rt>しじ</rt></ruby>を<ruby>待<rt>ま</rt></ruby>ってね</p>
+          </div>
+        </div>
+      </div>
+
       <!-- View: 先生用ダッシュボード -->
       <div id="view-teacher" class="d-none">
         <div class="card shadow-sm mb-4">
           <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
             <span><i class="bi bi-speedometer2"></i> 先生用コントロール</span>
-            <button class="btn btn-sm btn-light" onclick="location.reload()">更新</button>
+            <div>
+              <button class="btn btn-sm btn-light me-1" onclick="location.reload()">更新</button>
+              <button class="btn btn-sm btn-outline-light" onclick="logoutTeacher()">
+                <i class="bi bi-box-arrow-right"></i> 終了
+              </button>
+            </div>
           </div>
           <div class="card-body">
             <!-- 新規授業作成 -->
@@ -138,10 +210,44 @@
               </div>
             </div>
 
+            <!-- フェーズコントロール -->
+            <h6 class="border-bottom pb-2 mt-4">授業フェーズ</h6>
+            <div class="d-flex gap-2 mb-3 flex-wrap" id="phase-controls">
+              <button class="btn btn-primary" id="btn-phase-BEFORE" onclick="changePhase('BEFORE')">
+                <i class="bi bi-1-circle"></i> 導入（BEFORE）
+              </button>
+              <button class="btn btn-outline-secondary" id="btn-phase-AFTER" onclick="changePhase('AFTER')">
+                <i class="bi bi-2-circle"></i> 振り返り（AFTER）
+              </button>
+              <button class="btn btn-outline-danger" id="btn-phase-CLOSED" onclick="changePhase('CLOSED')">
+                <i class="bi bi-stop-circle"></i> 授業終了
+              </button>
+            </div>
+            <p class="text-muted small" id="phase-status-text">現在のフェーズ: <strong id="current-phase-display">BEFORE</strong></p>
+
             <!-- 散布図 (Chart.js) -->
             <h6 class="border-bottom pb-2 mt-4">クラスの分布 (アノニマス・スキャッター)</h6>
             <div style="height: 300px;">
               <canvas id="scatterChart"></canvas>
+            </div>
+
+            <!-- 名簿管理 -->
+            <h6 class="border-bottom pb-2 mt-4">名簿管理</h6>
+            <div id="roster-list" class="mb-3">
+              <!-- JSで動的生成 -->
+            </div>
+            <div class="row g-2">
+              <div class="col">
+                <input type="text" class="form-control" id="new-student-name" placeholder="名前（例: 山田 太郎）">
+              </div>
+              <div class="col">
+                <input type="text" class="form-control" id="new-student-ruby" placeholder="ふりがな（例: やまだ たろう）">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-outline-success" onclick="addNewStudent()">
+                  <i class="bi bi-person-plus"></i> 追加
+                </button>
+              </div>
             </div>
           </div>
         </div>
