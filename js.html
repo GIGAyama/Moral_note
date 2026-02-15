@@ -1,846 +1,1506 @@
 <script>
-/**
- * Global State
- */
-let currentUser = null;
-let currentSession = null;
-let currentPhase = 'BEFORE'; // BEFORE, MIDDLE, AFTER
-let scatterChart = null;
-let sliderColor = '#1a73e8';
-let loadingTimeout = null;
-let selectedTag = '';
+  /**
+   * Global State
+   */
+  let currentUser = null;
+  let currentSession = null;
+  let currentPhase = 'BEFORE'; // BEFORE, MIDDLE, AFTER
+  let scatterChart = null;
+  let sliderColor = '#1a73e8';
+  let loadingTimeout = null;
+  let selectedTag = '';
+  let isPageVisible = true; // タブ表示状態
 
-/**
- * Initialization
- */
-document.addEventListener('DOMContentLoaded', () => {
-  // 1. セーフティネット: 15秒経っても読み込みが終わらない場合は救済ボタンを出す
-  loadingTimeout = setTimeout(() => {
-    const loader = document.getElementById('loading');
-    if (loader && !loader.classList.contains('d-none')) {
-      loader.innerHTML = `
+  // Drive Picker State
+  let pickerModal = null;
+  let currentPickerFolderId = null;
+  let parentPickerFolderId = null;
+
+
+  /**
+   * Initialization
+   */
+  document.addEventListener('visibilitychange', () => {
+    isPageVisible = !document.hidden;
+    if (isPageVisible) {
+      // タブがアクティブになったら即座に状態チェック
+      if (localStorage.getItem('isTeacher') !== 'true') {
+        checkPhaseUpdate();
+      }
+    }
+  });
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1. セーフティネット
+    loadingTimeout = setTimeout(() => {
+      const loader = document.getElementById('loading');
+      if (loader && !loader.classList.contains('d-none')) {
+        loader.innerHTML = `
         <div class="alert alert-warning">
           <p>読み込みに時間がかかっています。</p>
-          <button class="btn btn-sm btn-outline-dark" onclick="location.reload()">再読み込み</button>
+          <button class="btn btn-sm btn-outline-dark" onclick="resetApp()">再読み込み</button>
         </div>`;
+      }
+    }, 15000);
+
+    // アプリフロー開始
+    initAppFlow();
+
+    // ポーリング開始 (5秒間隔)
+    setInterval(() => {
+      if (!isPageVisible) return; // タブ非表示時は停止
+      checkPhaseUpdate();
+    }, 5000);
+  });
+
+  /**
+   * UI Logic (Safe Transition)
+   */
+  function showView(viewId) {
+    // すべてのビューを隠す
+    const allViews = document.querySelectorAll('[id^="view-"]');
+    allViews.forEach(el => el.classList.add('d-none'));
+
+    // 指定されたビューを表示
+    const target = document.getElementById(viewId);
+    if (target) {
+      target.classList.remove('d-none');
+      target.classList.add('fade-in');
+    } else {
+      // 万が一IDが間違っていたら待機画面を出す（ホワイトアウト防止）
+      console.warn(`View ID "${viewId}" not found. Fallback to waiting.`);
+      const fallback = document.getElementById('view-waiting');
+      if (fallback) fallback.classList.remove('d-none');
     }
-  }, 15000);
-
-  // 2. 先生モード判定（最優先）
-  const isTeacher = localStorage.getItem('isTeacher') === 'true';
-  if (isTeacher) {
-    showView('view-teacher'); // 先に画面を出しておく
   }
 
-  // 3. データ取得開始
-  runGoogleScript('getInitialData')
-    .then(response => {
-      // タイムアウト解除
-      clearTimeout(loadingTimeout);
-      document.getElementById('loading').classList.add('d-none');
-      
-      // レスポンス検証
-      if (!response || !response.success) {
-        throw new Error(response ? response.error : 'データ取得失敗');
-      }
-
-      const data = response;
-
-      // 先生ならここで処理終了（生徒用ロジックには行かせない）
-      if (isTeacher) {
-        if (data.activeSession) {
-          currentSession = data.activeSession;
-          updatePhaseButtons(currentSession.phase || 'BEFORE');
-        }
-        renderRoster(data.users);
-        initChart();       // チャート準備
-        loadScatterData(); // データロード
-        checkGeminiStatus(); // AI設定確認
-        return;            // ★重要: ここでリターンして生徒ロジックを遮断
-      }
-
-      // --- 以下、生徒用ロジック ---
-
-      // 名簿セット
-      const select = document.getElementById('student-select');
-      if (data.users && Array.isArray(data.users) && data.users.length > 0) {
-        // 既存の選択肢をクリア
-        select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
-        data.users.forEach(u => {
-          const option = document.createElement('option');
-          option.value = u.id;
-          option.innerHTML = `${u.name} <small>(${u.ruby})</small>`;
-          select.appendChild(option);
-        });
-      }
-
-      // セッション状態による分岐
-      if (data.activeSession) {
-        currentSession = data.activeSession;
-        currentPhase = currentSession.phase || 'BEFORE';
-        setupSessionUI(currentSession);
-
-        // フェーズラベル更新
-        const phaseLabels = { BEFORE: '今の考えを教えてね', AFTER: '振り返りの時間です' };
-        const phaseLabel = document.getElementById('phase-label');
-        if (phaseLabel && phaseLabels[currentPhase]) {
-          phaseLabel.innerHTML = phaseLabels[currentPhase];
-        }
-
-        // ログイン済みかチェック
-        const storedUid = localStorage.getItem('studentId');
-        if (storedUid) {
-          currentUser = { id: storedUid };
-          if (currentPhase === 'AFTER') {
-            showReflectionView();
-          } else {
-            showView('view-entry'); // 入力画面へ
-          }
-        } else {
-          showView('view-login'); // ログイン画面へ
-        }
-      } else {
-        // セッションがない場合
-        showView('view-waiting');
-      }
-    })
-    .catch(err => {
-      clearTimeout(loadingTimeout);
-      document.getElementById('loading').classList.add('d-none');
-      console.error(err);
-      
-      // エラーが出てもホワイトアウトさせず、エラー表示をする
-      Swal.fire({
-        icon: 'error',
-        title: '通信エラー',
-        text: 'データの読み込みに失敗しました。再読み込みしますか？',
-        showCancelButton: true,
-        confirmButtonText: '再読み込み',
-      }).then((result) => {
-        if (result.isConfirmed) {
-          location.reload();
-        }
-      });
-    });
-});
-
-/**
- * UI Logic (Safe Transition)
- */
-function showView(viewId) {
-  // すべてのビューを隠す
-  const allViews = document.querySelectorAll('[id^="view-"]');
-  allViews.forEach(el => el.classList.add('d-none'));
-
-  // 指定されたビューを表示
-  const target = document.getElementById(viewId);
-  if (target) {
-    target.classList.remove('d-none');
-    target.classList.add('fade-in');
-  } else {
-    // 万が一IDが間違っていたら待機画面を出す（ホワイトアウト防止）
-    console.warn(`View ID "${viewId}" not found. Fallback to waiting.`);
-    const fallback = document.getElementById('view-waiting');
-    if(fallback) fallback.classList.remove('d-none');
-  }
-}
-
-function login() {
-  const select = document.getElementById('student-select');
-  const uid = select.value;
-  if (!uid) {
-    Swal.fire('名前を選んでね', '', 'warning');
-    return;
-  }
-  
-  localStorage.setItem('studentId', uid);
-  currentUser = { id: uid };
-  showView('view-entry');
-}
-
-function setupSessionUI(session) {
-  const titleEl = document.getElementById('session-title');
-  if(titleEl) titleEl.innerText = session.title;
-  
-  // UIリセット
-  document.getElementById('input-mode-slider').classList.add('d-none');
-  document.getElementById('input-mode-tags').classList.add('d-none');
-
-  // 入力モード切替
-  if (session.inputType === 'SLIDER') {
-    document.getElementById('input-mode-slider').classList.remove('d-none');
-    document.getElementById('slider-label-min').innerText = session.options.minLabel || 'A';
-    document.getElementById('slider-label-max').innerText = session.options.maxLabel || 'B';
-    // 初期カラー設定
-    updateSliderColor(document.getElementById('input-slider').value);
-  } else if (session.inputType === 'TAGS') {
-    document.getElementById('input-mode-tags').classList.remove('d-none');
-    const container = document.getElementById('tags-container');
-    container.innerHTML = '';
-    const tags = session.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-    tags.forEach(tag => {
-      const btn = document.createElement('div');
-      btn.className = 'emotion-tag';
-      btn.innerText = tag;
-      btn.onclick = () => selectTag(btn);
-      container.appendChild(btn);
-    });
-  }
-}
-
-function updateSliderColor(val) {
-  document.getElementById('slider-value-display').innerText = val;
-  const r = Math.floor(255 * (100 - val) / 100);
-  const b = Math.floor(255 * val / 100);
-  sliderColor = `rgb(${r}, 50, ${b})`;
-  
-  const bg = document.getElementById('color-match-bg');
-  if(bg) bg.style.backgroundColor = `rgba(${r}, 50, ${b}, 0.2)`;
-}
-
-function selectTag(el) {
-  document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
-  el.classList.add('active');
-  selectedTag = el.innerText;
-}
-
-/**
- * Action: 送信
- */
-function submitOpinion() {
-  if (!currentUser || !currentSession) return;
-
-  const text = document.getElementById('input-text').value;
-  let val = 0;
-
-  if (currentSession.inputType === 'SLIDER') {
-    val = Number(document.getElementById('input-slider').value);
-  } else if (currentSession.inputType === 'TAGS') {
-    if (!selectedTag) {
-      Swal.fire('気持ちを選んでね', '', 'warning');
+  function login() {
+    const select = document.getElementById('student-select');
+    const uid = select.value;
+    if (!uid) {
+      Swal.fire('名前を選んでね', '', 'warning');
       return;
     }
-    val = selectedTag;
-  }
 
-  const payload = {
-    sessionId: currentSession.id,
-    studentId: currentUser.id,
-    phase: currentPhase,
-    value: val,
-    text: text
-  };
+    localStorage.setItem('studentId', uid);
+    currentUser = { id: uid };
 
-  Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
-
-  runGoogleScript('submitLog', payload)
-    .then(() => {
-      Swal.fire({
-        icon: 'success',
-        title: '送りました！',
-        text: '友達の意見を聞いてみよう',
-        timer: 1500,
-        showConfirmButton: false
-      });
-      
-      if (currentSession.inputType === 'SLIDER') {
-         const card = document.getElementById('color-match-card');
-         if(card) card.classList.remove('d-none');
+    // 授業有無で分岐
+    if (currentSession) {
+      if (currentPhase === 'AFTER') {
+        showReflectionView();
+      } else {
+        showView('view-entry');
       }
-
-      // フォームリセット
-      document.getElementById('input-text').value = '';
-      selectedTag = '';
-      document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
-
-      // AIフィードバックを非同期で取得
-      document.getElementById('ai-feedback-card').classList.add('d-none');
-      if (currentSession) {
-        requestAiFeedback(currentSession.title, text, currentSession.inputType, val);
-      }
-    })
-    .catch(showError);
-}
-
-/**
- * Teacher Functions
- */
-function logoutTeacher() {
-  localStorage.removeItem('isTeacher');
-  location.reload();
-}
-
-function logoutStudent() {
-  localStorage.removeItem('studentId');
-  currentUser = null;
-  showView('view-login');
-}
-
-function toggleTeacherMode() {
-  const isT = localStorage.getItem('isTeacher') === 'true';
-  if (isT) {
-    if(confirm('先生モードを終了しますか？')) {
-      localStorage.removeItem('isTeacher');
-      location.reload();
-    }
-  } else {
-    const pass = prompt('先生用パスワード（デモ: admin）');
-    if (pass === 'admin') {
-      localStorage.setItem('isTeacher', 'true');
-      location.reload(); // リロードして確実に先生モードで起動
+    } else {
+      showView('view-waiting');
     }
   }
-}
 
-function toggleSessionOptions() {
-  const type = document.getElementById('new-session-type').value;
-  document.getElementById('session-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
-  document.getElementById('session-opts-tags').classList.toggle('d-none', type !== 'TAGS');
-}
+  function setupSessionUI(session) {
+    const titleEl = document.getElementById('session-title');
+    if (titleEl) titleEl.innerText = session.title;
 
-function createNewSession() {
-  const title = document.getElementById('new-session-title').value;
-  if (!title) { Swal.fire('タイトルを入れてね', '', 'warning'); return; }
+    // UIリセット
+    document.getElementById('input-mode-slider').classList.add('d-none');
+    document.getElementById('input-mode-tags').classList.add('d-none');
 
-  const type = document.getElementById('new-session-type').value;
-  let options = {};
-
-  if (type === 'SLIDER') {
-    const minLabel = document.getElementById('opt-slider-min').value.trim() || '賛成';
-    const maxLabel = document.getElementById('opt-slider-max').value.trim() || '反対';
-    options = { minLabel: minLabel, maxLabel: maxLabel, tags: [] };
-  } else if (type === 'TAGS') {
-    const tagsStr = document.getElementById('opt-tags-list').value.trim();
-    const tags = tagsStr ? tagsStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['共感', '疑問', '納得', '驚き'];
-    options = { tags: tags };
+    // 入力モード切替
+    if (session.inputType === 'SLIDER') {
+      document.getElementById('input-mode-slider').classList.remove('d-none');
+      document.getElementById('slider-label-min').innerText = session.options.minLabel || 'A';
+      document.getElementById('slider-label-max').innerText = session.options.maxLabel || 'B';
+      // 初期カラー設定
+      updateSliderColor(document.getElementById('input-slider').value);
+    } else if (session.inputType === 'TAGS') {
+      document.getElementById('input-mode-tags').classList.remove('d-none');
+      const container = document.getElementById('tags-container');
+      container.innerHTML = '';
+      const tags = session.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
+      tags.forEach(tag => {
+        const btn = document.createElement('div');
+        btn.className = 'emotion-tag';
+        btn.innerText = tag;
+        btn.onclick = () => selectTag(btn);
+        container.appendChild(btn);
+      });
+    }
   }
 
-  Swal.fire({ title: '授業を作成中...', didOpen: () => Swal.showLoading() });
+  function updateSliderColor(val) {
+    document.getElementById('slider-value-display').innerText = val;
+    const r = Math.floor(255 * (100 - val) / 100);
+    const b = Math.floor(255 * val / 100);
+    sliderColor = `rgb(${r}, 50, ${b})`;
 
-  runGoogleScript('createSession', title, type, JSON.stringify(options))
-    .then(() => {
-      Swal.fire({
-        icon: 'success',
-        title: '作成しました',
-        text: '生徒に「再読込み」するように伝えてください',
-      });
-      // セッション情報をリロードして散布図を更新
-      runGoogleScript('getInitialData').then(response => {
-        if (response && response.success && response.activeSession) {
-          currentSession = response.activeSession;
-          loadScatterData();
+    const bg = document.getElementById('color-match-bg');
+    if (bg) bg.style.backgroundColor = `rgba(${r}, 50, ${b}, 0.2)`;
+  }
+
+  function selectTag(el) {
+    document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
+    el.classList.add('active');
+    selectedTag = el.innerText;
+  }
+
+  /**
+   * Action: 送信
+   */
+  // Opinion Sharing State
+  let isOpinionViewOpen = false;
+
+  function toggleOpinionView() {
+    const container = document.getElementById('opinion-share-container');
+    const btn = document.getElementById('btn-opinion-share');
+
+    if (!container) return; // container needs to be added to index.html
+
+    if (container.classList.contains('d-none')) {
+      // Open
+      container.classList.remove('d-none');
+      btn.innerHTML = '<i class="bi bi-x-circle"></i> 閉じる';
+      btn.classList.replace('btn-outline-info', 'btn-secondary');
+      loadClassOpinions();
+    } else {
+      // Close
+      container.classList.add('d-none');
+      btn.innerHTML = '<i class="bi bi-people"></i> みんなの考え';
+      btn.classList.replace('btn-secondary', 'btn-outline-info');
+    }
+  }
+
+  function loadClassOpinions() {
+    const list = document.getElementById('opinion-list');
+    list.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-secondary"></div> 読み込み中...</div>';
+
+    if (!currentSession) return;
+
+    runGoogleScript('getAnonymousOpinions', currentSession.id)
+      .then(opinions => {
+        if (!opinions || opinions.length === 0) {
+          list.innerHTML = '<p class="text-muted text-center py-2">まだ意見がありません</p>';
+          return;
         }
+
+        // Filter by current phase if desired, or show all? 
+        // Usually current phase is more relevant for dialogue.
+        // But let's show all for now, maybe sorted by Recency or Phase.
+        // Let's filter by current Phase to avoid spoilers if in BEFORE.
+        // If we are in BEFORE, show BEFORE. If AFTER, show both? Or just AFTER?
+        // User request said "share opinions", implied for dialogue. 
+        // Safe bet: Show opinions matching current phase, OR if CLOSED show all.
+
+        const filtered = opinions.filter(o => o.phase === currentPhase);
+
+        if (filtered.length === 0) {
+          list.innerHTML = '<p class="text-muted text-center py-2">この場面の意見はまだありません</p>';
+          return;
+        }
+
+        list.innerHTML = filtered.map(o => {
+          const valBadge = currentSession.inputType === 'SLIDER'
+            ? `<span class="badge bg-light text-dark border">${o.value}</span>`
+            : `<span class="badge bg-light text-dark border text-wrap">${o.value}</span>`;
+
+          return `
+          <div class="card mb-2 shadow-sm" style="border-left: 4px solid #17a2b8;">
+            <div class="card-body py-2">
+              <div class="mb-1">${valBadge}</div>
+              <div class="card-text">${o.text}</div>
+            </div>
+          </div>
+        `;
+        }).join('');
+      })
+      .catch(err => {
+        list.innerHTML = '<p class="text-danger text-center">読み込み失敗</p>';
       });
-    })
-    .catch(showError);
-}
-
-/**
- * Phase Management (Teacher)
- */
-function changePhase(newPhase) {
-  if (!currentSession) {
-    Swal.fire('授業が選択されていません', '', 'warning');
-    return;
   }
 
-  if (newPhase === 'CLOSED') {
-    Swal.fire({
-      title: '授業を終了しますか？',
-      text: '生徒は入力できなくなります',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: '終了する',
-      cancelButtonText: 'キャンセル'
-    }).then(result => {
-      if (result.isConfirmed) {
-        runGoogleScript('closeSession', currentSession.id)
-          .then(() => {
-            currentSession = null;
-            updatePhaseButtons('CLOSED');
-            Swal.fire('授業を終了しました', '', 'success');
-          })
-          .catch(showError);
+  function submitOpinion() {
+    if (!currentUser || !currentSession) return;
+
+    const text = document.getElementById('input-text').value;
+    let val = 0;
+
+    if (currentSession.inputType === 'SLIDER') {
+      val = Number(document.getElementById('input-slider').value);
+    } else if (currentSession.inputType === 'TAGS') {
+      if (!selectedTag) {
+        Swal.fire('気持ちを選んでね', '', 'warning');
+        return;
       }
-    });
-    return;
-  }
+      val = selectedTag;
+    }
 
-  Swal.fire({ title: 'フェーズ変更中...', didOpen: () => Swal.showLoading() });
+    const payload = {
+      sessionId: currentSession.id,
+      studentId: currentUser.id,
+      phase: currentPhase,
+      value: val,
+      text: text
+    };
 
-  runGoogleScript('updateSessionPhase', currentSession.id, newPhase)
-    .then(result => {
-      if (result && result.success) {
-        currentSession.phase = newPhase;
-        updatePhaseButtons(newPhase);
+    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+
+    runGoogleScript('submitLog', payload)
+      .then(() => {
         Swal.fire({
           icon: 'success',
-          title: 'フェーズ変更完了',
-          text: newPhase === 'BEFORE' ? '導入フェーズです' : '振り返りフェーズです',
+          title: '送りました！',
+          text: '友達の意見を聞いてみよう',
           timer: 1500,
           showConfirmButton: false
         });
-      }
-    })
-    .catch(showError);
-}
 
-function updatePhaseButtons(phase) {
-  const phases = ['BEFORE', 'AFTER', 'CLOSED'];
-  phases.forEach(p => {
-    const btn = document.getElementById('btn-phase-' + p);
-    if (!btn) return;
-    if (p === phase) {
-      btn.classList.remove('btn-outline-secondary', 'btn-outline-danger');
-      btn.classList.add(p === 'CLOSED' ? 'btn-danger' : 'btn-primary');
-    } else {
-      btn.classList.remove('btn-primary', 'btn-danger');
-      btn.classList.add(p === 'CLOSED' ? 'btn-outline-danger' : 'btn-outline-secondary');
-    }
-  });
-  const display = document.getElementById('current-phase-display');
-  if (display) {
-    const labels = { BEFORE: '導入（BEFORE）', AFTER: '振り返り（AFTER）', CLOSED: '終了' };
-    display.innerText = labels[phase] || phase;
-  }
-}
-
-/**
- * Reflection (Student - AFTER Phase)
- */
-function showReflectionView() {
-  if (!currentSession || !currentUser) return;
-
-  // セッションの入力モードに応じたUI表示
-  const sliderDiv = document.getElementById('reflection-input-slider');
-  const tagsDiv = document.getElementById('reflection-input-tags');
-  sliderDiv.classList.add('d-none');
-  tagsDiv.classList.add('d-none');
-
-  if (currentSession.inputType === 'SLIDER') {
-    sliderDiv.classList.remove('d-none');
-    document.getElementById('reflection-slider-label-min').innerText = currentSession.options.minLabel || 'A';
-    document.getElementById('reflection-slider-label-max').innerText = currentSession.options.maxLabel || 'B';
-  } else if (currentSession.inputType === 'TAGS') {
-    tagsDiv.classList.remove('d-none');
-    const container = document.getElementById('reflection-tags-container');
-    container.innerHTML = '';
-    const tags = currentSession.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-    tags.forEach(tag => {
-      const btn = document.createElement('div');
-      btn.className = 'emotion-tag';
-      btn.innerText = tag;
-      btn.onclick = () => selectReflectionTag(btn);
-      container.appendChild(btn);
-    });
-  }
-
-  // BEFOREの回答を取得して表示
-  runGoogleScript('getStudentLogs', currentSession.id, currentUser.id)
-    .then(logs => {
-      const beforeLog = logs.find(l => l.phase === 'BEFORE');
-      const el = document.getElementById('reflection-before');
-      if (beforeLog) {
-        let display = '';
         if (currentSession.inputType === 'SLIDER') {
-          display = `<div class="mb-1">位置: <span class="badge bg-primary">${beforeLog.value}</span> / 100</div>`;
-        } else if (currentSession.inputType === 'TAGS') {
-          display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${beforeLog.value}</span></div>`;
+          const card = document.getElementById('color-match-card');
+          if (card) card.classList.remove('d-none');
         }
-        if (beforeLog.text) {
-          display += `<div class="mt-1">「${beforeLog.text}」</div>`;
+
+        // フォームリセット
+        document.getElementById('input-text').value = '';
+        selectedTag = '';
+        document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
+
+        // AIフィードバックを非同期で取得
+        document.getElementById('ai-feedback-card').classList.add('d-none');
+        if (currentSession) {
+          requestAiFeedback(currentSession.title, text, currentSession.inputType, val);
         }
-        el.innerHTML = display;
-      } else {
-        el.innerHTML = '<span class="text-muted">導入時の記録がありません</span>';
+      })
+      .catch(showError);
+  }
+
+  /**
+   * Teacher Functions
+   */
+  function logoutTeacher() {
+    localStorage.removeItem('isTeacher');
+    resetApp();
+  }
+
+  function logoutStudent() {
+    localStorage.removeItem('studentId');
+    currentUser = null;
+    showView('view-login');
+  }
+
+
+  function toggleTeacherMode() {
+    const isT = localStorage.getItem('isTeacher') === 'true';
+    if (isT) {
+      if (confirm('先生モードを終了しますか？')) {
+        logoutTeacher();
       }
-    })
-    .catch(err => {
-      console.error(err);
-      document.getElementById('reflection-before').innerHTML = '<span class="text-muted">読み込みに失敗しました</span>';
-    });
+    } else {
+      // サーバーサイド認証
+      Swal.fire({
+        title: '先生用パスワード',
+        input: 'password',
+        inputAttributes: {
+          autocapitalize: 'off'
+        },
+        showCancelButton: true,
+        confirmButtonText: 'ログイン',
+        showLoaderOnConfirm: true,
+        preConfirm: (pass) => {
+          return runGoogleScript('checkTeacherPassword', pass)
+            .then(result => {
+              if (!result.success) {
+                throw new Error('パスワードが違います');
+              }
+              return true;
+            })
+            .catch(error => {
+              Swal.showValidationMessage(
+                `ログイン失敗: ${error}`
+              )
+            })
+        },
+        allowOutsideClick: () => !Swal.isLoading()
+      }).then((result) => {
+        if (result.isConfirmed) {
+          localStorage.setItem('isTeacher', 'true');
+          resetApp(); // リロードせずにモード切替
+        }
+      })
+    }
+  }
 
-  showView('view-reflection');
-}
+  function toggleSessionOptions() {
+    const type = document.getElementById('new-session-type').value;
+    document.getElementById('session-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
+    document.getElementById('session-opts-tags').classList.toggle('d-none', type !== 'TAGS');
+  }
 
-let selectedReflectionTag = '';
+  function createNewSession() {
+    const title = document.getElementById('new-session-title').value;
+    if (!title) { Swal.fire('タイトルを入れてね', '', 'warning'); return; }
 
-function selectReflectionTag(el) {
-  document.querySelectorAll('#reflection-tags-container .emotion-tag').forEach(e => e.classList.remove('active'));
-  el.classList.add('active');
-  selectedReflectionTag = el.innerText;
-}
+    const type = document.getElementById('new-session-type').value;
+    let options = {};
 
-function updateReflectionSliderDisplay(val) {
-  document.getElementById('reflection-slider-value').innerText = val;
-}
+    if (type === 'SLIDER') {
+      const minLabel = document.getElementById('opt-slider-min').value.trim() || '賛成';
+      const maxLabel = document.getElementById('opt-slider-max').value.trim() || '反対';
+      options = { minLabel: minLabel, maxLabel: maxLabel, tags: [] };
+    } else if (type === 'TAGS') {
+      const tagsStr = document.getElementById('opt-tags-list').value.trim();
+      const tags = tagsStr ? tagsStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['共感', '疑問', '納得', '驚き'];
+      options = { tags: tags };
+    }
 
-function submitReflection() {
-  if (!currentUser || !currentSession) return;
+    Swal.fire({ title: '授業を作成中...', didOpen: () => Swal.showLoading() });
 
-  const text = document.getElementById('reflection-text').value;
-  let val = 0;
+    runGoogleScript('createSession', title, type, JSON.stringify(options))
+      .then(() => {
+        Swal.fire({
+          icon: 'success',
+          title: '作成しました',
+          text: '生徒に「更新」ボタンを押すよう伝えてください',
+        });
+        // セッション情報をリロードして散布図を更新
+        runGoogleScript('getInitialData').then(response => {
+          if (response && response.success && response.activeSession) {
+            currentSession = response.activeSession;
+            loadScatterData();
+          }
+        });
+      })
+      .catch(showError);
+  }
 
-  if (currentSession.inputType === 'SLIDER') {
-    val = Number(document.getElementById('reflection-slider').value);
-  } else if (currentSession.inputType === 'TAGS') {
-    if (!selectedReflectionTag) {
-      Swal.fire('気持ちを選んでね', '', 'warning');
+  /**
+   * Phase Management (Teacher)
+   */
+  function changePhase(newPhase) {
+    if (!currentSession) {
+      Swal.fire('授業が選択されていません', '', 'warning');
       return;
     }
-    val = selectedReflectionTag;
+
+    if (newPhase === 'CLOSED') {
+      Swal.fire({
+        title: '授業を終了しますか？',
+        text: '生徒は入力できなくなります',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: '終了する',
+        cancelButtonText: 'キャンセル'
+      }).then(result => {
+        if (result.isConfirmed) {
+          runGoogleScript('closeSession', currentSession.id)
+            .then(() => {
+              currentSession = null;
+              updatePhaseButtons('CLOSED');
+              Swal.fire('授業を終了しました', '', 'success');
+            })
+            .catch(showError);
+        }
+      });
+      return;
+    }
+
+    Swal.fire({ title: 'フェーズ変更中...', didOpen: () => Swal.showLoading() });
+
+    runGoogleScript('updateSessionPhase', currentSession.id, newPhase)
+      .then(result => {
+        if (result && result.success) {
+          currentSession.phase = newPhase;
+          updatePhaseButtons(newPhase);
+          Swal.fire({
+            icon: 'success',
+            title: 'フェーズ変更完了',
+            text: newPhase === 'BEFORE' ? '導入フェーズです' : '振り返りフェーズです',
+            timer: 1500,
+            showConfirmButton: false
+          });
+        }
+      })
+      .catch(showError);
   }
 
-  const payload = {
-    sessionId: currentSession.id,
-    studentId: currentUser.id,
-    phase: 'AFTER',
-    value: val,
-    text: text
-  };
+  function updatePhaseButtons(phase) {
+    const phases = ['BEFORE', 'AFTER', 'CLOSED'];
+    phases.forEach(p => {
+      // Class Mode Buttons
+      const btn = document.getElementById('btn-phase-' + p + '-class');
+      if (!btn) return;
 
-  Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+      if (p === phase) {
+        btn.classList.remove('btn-outline-primary', 'btn-outline-danger');
+        btn.classList.add(p === 'CLOSED' ? 'btn-danger' : 'btn-primary');
+        btn.classList.remove('bg-white'); // Ensure active state is solid color
+      } else {
+        btn.classList.remove('btn-primary', 'btn-danger');
+        btn.classList.add(p === 'CLOSED' ? 'btn-outline-danger' : 'btn-outline-primary');
+        btn.classList.add('bg-white'); // Keep background white for outline
+      }
+    });
 
-  runGoogleScript('submitLog', payload)
-    .then(() => {
-      Swal.fire({
-        icon: 'success',
-        title: '振り返りを送りました！',
-        timer: 1500,
-        showConfirmButton: false
+    const labels = { BEFORE: '導入（BEFORE）', AFTER: '振り返り（AFTER）', CLOSED: '終了' };
+    const displayClass = document.getElementById('current-phase-display-class');
+    if (displayClass) displayClass.innerText = labels[phase] || phase;
+  }
+
+  function switchTeacherMode(mode) {
+    // Toggle Nav
+    document.getElementById('btn-mode-prep').classList.toggle('active', mode === 'prep');
+    document.getElementById('btn-mode-class').classList.toggle('active', mode === 'class');
+
+    // Toggle View
+    document.getElementById('teacher-mode-prep').classList.toggle('d-none', mode !== 'prep');
+    document.getElementById('teacher-mode-class').classList.toggle('d-none', mode !== 'class');
+  }
+
+  /**
+   * Reflection (Student - AFTER Phase)
+   */
+  function showReflectionView() {
+    if (!currentSession || !currentUser) return;
+
+    // セッションの入力モードに応じたUI表示
+    const sliderDiv = document.getElementById('reflection-input-slider');
+    const tagsDiv = document.getElementById('reflection-input-tags');
+    sliderDiv.classList.add('d-none');
+    tagsDiv.classList.add('d-none');
+
+    if (currentSession.inputType === 'SLIDER') {
+      sliderDiv.classList.remove('d-none');
+      document.getElementById('reflection-slider-label-min').innerText = currentSession.options.minLabel || 'A';
+      document.getElementById('reflection-slider-label-max').innerText = currentSession.options.maxLabel || 'B';
+    } else if (currentSession.inputType === 'TAGS') {
+      tagsDiv.classList.remove('d-none');
+      const container = document.getElementById('reflection-tags-container');
+      container.innerHTML = '';
+      const tags = currentSession.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
+      tags.forEach(tag => {
+        const btn = document.createElement('div');
+        btn.className = 'emotion-tag';
+        btn.innerText = tag;
+        btn.onclick = () => selectReflectionTag(btn);
+        container.appendChild(btn);
       });
-      showView('view-done');
-    })
-    .catch(showError);
-}
+    }
 
-/**
+    // BEFOREの回答を取得して表示
+    runGoogleScript('getStudentLogs', currentSession.id, currentUser.id)
+      .then(logs => {
+        const beforeLog = logs.find(l => l.phase === 'BEFORE');
+        const el = document.getElementById('reflection-before');
+        if (beforeLog) {
+          let display = '';
+          if (currentSession.inputType === 'SLIDER') {
+            display = `<div class="mb-1">位置: <span class="badge bg-primary">${beforeLog.value}</span> / 100</div>`;
+          } else if (currentSession.inputType === 'TAGS') {
+            display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${beforeLog.value}</span></div>`;
+          }
+          if (beforeLog.text) {
+            display += `<div class="mt-1">「${beforeLog.text}」</div>`;
+          }
+          el.innerHTML = display;
+        } else {
+          el.innerHTML = '<span class="text-muted">導入時の記録がありません</span>';
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById('reflection-before').innerHTML = '<span class="text-muted">読み込みに失敗しました</span>';
+      });
+
+    showView('view-reflection');
+  }
+
+  let selectedReflectionTag = '';
+
+  function selectReflectionTag(el) {
+    document.querySelectorAll('#reflection-tags-container .emotion-tag').forEach(e => e.classList.remove('active'));
+    el.classList.add('active');
+    selectedReflectionTag = el.innerText;
+  }
+
+  function updateReflectionSliderDisplay(val) {
+    document.getElementById('reflection-slider-value').innerText = val;
+  }
+
+  function submitReflection() {
+    if (!currentUser || !currentSession) return;
+
+    const text = document.getElementById('reflection-text').value;
+    let val = 0;
+
+    if (currentSession.inputType === 'SLIDER') {
+      val = Number(document.getElementById('reflection-slider').value);
+    } else if (currentSession.inputType === 'TAGS') {
+      if (!selectedReflectionTag) {
+        Swal.fire('気持ちを選んでね', '', 'warning');
+        return;
+      }
+      val = selectedReflectionTag;
+    }
+
+    const payload = {
+      sessionId: currentSession.id,
+      studentId: currentUser.id,
+      phase: 'AFTER',
+      value: val,
+      text: text
+    };
+
+    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+
+    runGoogleScript('submitLog', payload)
+      .then(() => {
+        Swal.fire({
+          icon: 'success',
+          title: '振り返りを送りました！',
+          timer: 1500,
+          showConfirmButton: false
+        });
+        showView('view-done');
+      })
+      .catch(showError);
+  }
+
+  /**
+   * Student Phase Polling
+   */
+  /**
  * Student Phase Polling
  */
-function checkPhaseUpdate() {
-  if (localStorage.getItem('isTeacher') === 'true') return;
-  if (!currentSession) return;
+  function checkPhaseUpdate() {
+    if (localStorage.getItem('isTeacher') === 'true') return;
 
-  runGoogleScript('getInitialData')
-    .then(response => {
-      if (!response || !response.success || !response.activeSession) return;
-
-      const serverPhase = response.activeSession.phase;
-      if (serverPhase !== currentSession.phase) {
-        currentSession.phase = serverPhase;
-        currentPhase = serverPhase;
-
-        if (serverPhase === 'AFTER') {
-          showReflectionView();
+    runGoogleScript('getPollingData')
+      .then(data => {
+        // 1. ケース: 待機中だったが、授業が始まった
+        if (!currentSession && data.activeSession) {
+          console.log('Session started! Reloading...');
+          resetApp(); // アプリ再初期化で授業コンテキストを読み込む
+          return;
         }
-      }
-    })
-    .catch(() => {}); // ポーリングエラーは静かに無視
-}
 
-/**
- * Roster Management (Teacher)
- */
-function renderRoster(users) {
-  const container = document.getElementById('roster-list');
-  if (!container) return;
+        // 2. ケース: 授業中だったが、授業が終わった (または消された)
+        if (currentSession && !data.activeSession) {
+          console.log('Session ended. Reloading...');
+          resetApp(); // アプリ再初期化で待機画面へ
+          return;
+        }
 
-  if (!users || users.length === 0) {
-    container.innerHTML = '<p class="text-muted small">名簿が空です</p>';
-    return;
+        // 3. ケース: IDが変わった（別の授業になった）
+        if (currentSession && data.activeSession && currentSession.id !== data.activeSession.id) {
+          console.log('Session changed. Reloading...');
+          resetApp();
+          return;
+        }
+
+        // 4. ケース: フェーズが変わった
+        if (currentSession && data.activeSession) {
+          const serverPhase = data.activeSession.phase;
+          if (serverPhase !== currentSession.phase) {
+            console.log(`Phase changed: ${currentSession.phase} -> ${serverPhase}`);
+            currentSession.phase = serverPhase;
+            currentPhase = serverPhase;
+
+            // UI更新
+            const phaseLabels = { BEFORE: '今の考えを教えてね', AFTER: '振り返りの時間です' };
+            const pLabel = document.getElementById('phase-label');
+            if (pLabel) pLabel.innerText = phaseLabels[serverPhase] || serverPhase;
+
+            updatePhaseButtons && updatePhaseButtons(serverPhase); // もし関数があれば
+
+            if (serverPhase === 'AFTER') {
+              showReflectionView();
+              Swal.fire({
+                icon: 'info',
+                title: '振り返りの時間です',
+                text: '授業のまとめを入力しましょう',
+                timer: 2000,
+                showConfirmButton: false
+              });
+            } else {
+              // BEFOREに戻った場合など
+              showView('view-entry');
+            }
+          }
+        }
+      })
+      .catch(() => { }); // ポーリングエラーは無視
   }
 
-  container.innerHTML = users.map(u =>
-    `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
+
+  /**
+   * Roster Management (Teacher)
+   */
+  function renderRoster(users) {
+    const container = document.getElementById('roster-list');
+    if (!container) return;
+
+    if (!users || users.length === 0) {
+      container.innerHTML = '<p class="text-muted small">名簿が空です</p>';
+      return;
+    }
+
+    container.innerHTML = users.map(u =>
+      `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
        <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
        <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
          <i class="bi bi-trash"></i>
        </button>
      </div>`
-  ).join('');
-}
-
-function addNewStudent() {
-  const name = document.getElementById('new-student-name').value.trim();
-  const ruby = document.getElementById('new-student-ruby').value.trim();
-  if (!name) {
-    Swal.fire('名前を入力してください', '', 'warning');
-    return;
+    ).join('');
   }
 
-  Swal.fire({ title: '追加中...', didOpen: () => Swal.showLoading() });
-
-  runGoogleScript('addStudent', name, ruby || '')
-    .then(result => {
-      if (result && result.success) {
-        document.getElementById('new-student-name').value = '';
-        document.getElementById('new-student-ruby').value = '';
-        Swal.fire({ icon: 'success', title: '追加しました', timer: 1000, showConfirmButton: false });
-        // 名簿を再読込
-        reloadRoster();
-      }
-    })
-    .catch(showError);
-}
-
-function removeStudent(studentId, name) {
-  Swal.fire({
-    title: `${name} を削除しますか？`,
-    icon: 'warning',
-    showCancelButton: true,
-    confirmButtonText: '削除',
-    cancelButtonText: 'キャンセル'
-  }).then(result => {
-    if (result.isConfirmed) {
-      runGoogleScript('deleteStudent', studentId)
-        .then(() => {
-          Swal.fire({ icon: 'success', title: '削除しました', timer: 1000, showConfirmButton: false });
-          reloadRoster();
-        })
-        .catch(showError);
-    }
-  });
-}
-
-function reloadRoster() {
-  runGoogleScript('getInitialData')
-    .then(response => {
-      if (response && response.success) {
-        renderRoster(response.users);
-      }
-    })
-    .catch(console.error);
-}
-
-/**
- * Chart.js Logic
- */
-function simpleHash(str) {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
-  }
-  return Math.abs(hash);
-}
-
-function initChart() {
-  const ctx = document.getElementById('scatterChart').getContext('2d');
-  scatterChart = new Chart(ctx, {
-    type: 'scatter',
-    data: {
-      datasets: [
-        {
-          label: '導入（BEFORE）',
-          data: [],
-          backgroundColor: 'rgba(26, 115, 232, 0.6)',
-          pointRadius: 8
-        },
-        {
-          label: '振り返り（AFTER）',
-          data: [],
-          backgroundColor: 'rgba(234, 67, 53, 0.6)',
-          pointRadius: 8
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      scales: {
-        x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
-        y: { min: 0, max: 10, display: false }
-      },
-      plugins: {
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              const d = context.raw;
-              let label = context.dataset.label + ': ';
-              if (d.text) label += `「${d.text.substring(0, 30)}」`;
-              return label;
-            }
-          }
-        },
-        legend: { display: true, position: 'top' }
-      }
-    }
-  });
-}
-
-function loadScatterData() {
-  if (!currentSession) return;
-
-  runGoogleScript('getSessionLogs', currentSession.id)
-    .then(logs => {
-      if (!scatterChart) return;
-      const beforeData = [];
-      const afterData = [];
-      logs.forEach(l => {
-        const y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5;
-        const point = { x: Number(l.value) || 0, y: y, text: l.text };
-        if (l.phase === 'AFTER') {
-          afterData.push(point);
+  function reloadRoster() {
+    runGoogleScript('getStudents')
+      .then(result => {
+        if (result.success) {
+          renderRoster(result.users);
         } else {
-          beforeData.push(point);
+          showError(result.error);
         }
-      });
-      scatterChart.data.datasets[0].data = beforeData;
-      scatterChart.data.datasets[1].data = afterData;
-      scatterChart.update();
-    })
-    .catch(console.error);
-}
-
-// ポーリング開始（教師: 散布図更新 / 生徒: フェーズ変更検知）
-setInterval(() => {
-  if (localStorage.getItem('isTeacher') === 'true' && currentSession) {
-    loadScatterData();
-  } else {
-    checkPhaseUpdate();
+      })
+      .catch(showError);
   }
-}, 5000);
 
-/**
- * AI Socrates (Gemini Integration)
- */
-function requestAiFeedback(sessionTitle, text, inputType, value) {
-  runGoogleScript('generateSocraticQuestion', sessionTitle, text, inputType, value)
-    .then(result => {
-      if (result && result.success && result.question) {
-        const card = document.getElementById('ai-feedback-card');
-        const textEl = document.getElementById('ai-feedback-text');
-        if (card && textEl) {
-          textEl.innerText = result.question;
-          card.classList.remove('d-none');
+  function addNewStudent() {
+    const name = document.getElementById('new-student-name').value.trim();
+    const ruby = document.getElementById('new-student-ruby').value.trim();
+    if (!name) {
+      Swal.fire('名前を入力してください', '', 'warning');
+      return;
+    }
+
+    Swal.fire({ title: '追加中...', didOpen: () => Swal.showLoading() });
+
+    runGoogleScript('addStudent', name, ruby || '')
+      .then(result => {
+        if (result && result.success) {
+          document.getElementById('new-student-name').value = '';
+          document.getElementById('new-student-ruby').value = '';
+          Swal.fire({ icon: 'success', title: '追加しました', timer: 1000, showConfirmButton: false });
+          // 名簿を再読込
+          reloadRoster();
+        }
+      })
+      .catch(showError);
+  }
+  /**
+   * 名簿一括登録
+   */
+  function registerBulkStudents() {
+    Swal.fire({
+      title: '名簿の一括登録',
+      input: 'textarea',
+      inputLabel: 'Excelやスプレッドシートからコピー＆ペーストしてください',
+      inputPlaceholder: '山田 太郎\tやまだ たろう\n佐藤 花子\tさとう はなこ',
+      showCancelButton: true,
+      confirmButtonText: '登録',
+      cancelButtonText: 'キャンセル',
+      footer: '※1行に「名前 (タブ) ふりがな」の形式、または名前のみ',
+      preConfirm: (text) => {
+        if (!text) return false;
+        const lines = text.split('\n');
+        const students = [];
+        lines.forEach(line => {
+          const parts = line.trim().split(/[\t,]+/); // Tab or Comma
+          if (parts.length > 0 && parts[0]) {
+            students.push({
+              name: parts[0].trim(),
+              ruby: parts[1] ? parts[1].trim() : ''
+            });
+          }
+        });
+        return students;
+      }
+    }).then((result) => {
+      if (result.isConfirmed && result.value.length > 0) {
+        const students = result.value;
+        Swal.fire({ title: '登録中...', didOpen: () => Swal.showLoading() });
+
+        runGoogleScript('addStudentBulk', students)
+          .then(res => {
+            if (res.success) {
+              Swal.fire('完了', `${res.count}人の生徒を追加しました`, 'success');
+              reloadRoster(); // Changed loadRoster() to reloadRoster() for consistency
+            } else {
+              showError(res.error);
+            }
+          })
+          .catch(showError);
+      }
+    });
+  }
+
+  function removeStudent(studentId, name) {
+    Swal.fire({
+      title: `${name} を削除しますか？`,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: '削除',
+      cancelButtonText: 'キャンセル'
+    }).then(result => {
+      if (result.isConfirmed) {
+        runGoogleScript('deleteStudent', studentId)
+          .then(() => {
+            Swal.fire({ icon: 'success', title: '削除しました', timer: 1000, showConfirmButton: false });
+            reloadRoster();
+          })
+          .catch(showError);
+      }
+    });
+  }
+
+  function reloadRoster() {
+    runGoogleScript('getInitialData')
+      .then(response => {
+        if (response && response.success) {
+          renderRoster(response.users);
+        }
+      })
+      .catch(console.error);
+  }
+
+  /**
+   * Chart.js Logic
+   */
+  function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  }
+
+  function initChart() {
+    const ctx = document.getElementById('scatterChart').getContext('2d');
+    scatterChart = new Chart(ctx, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            label: '導入（BEFORE）',
+            data: [],
+            backgroundColor: 'rgba(26, 115, 232, 0.6)',
+            pointRadius: 8
+          },
+          {
+            label: '振り返り（AFTER）',
+            data: [],
+            backgroundColor: 'rgba(234, 67, 53, 0.6)',
+            pointRadius: 8
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
+          y: { min: 0, max: 10, display: false }
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: function (context) {
+                const d = context.raw;
+                let label = context.dataset.label + ': ';
+                if (d.text) label += `「${d.text.substring(0, 30)}」`;
+                return label;
+              }
+            }
+          },
+          legend: { display: true, position: 'top' }
         }
       }
-    })
-    .catch(() => {}); // AIフィードバックは失敗しても無視
-}
-
-/**
- * Gemini API Key Management (Teacher)
- */
-function saveApiKey() {
-  const key = document.getElementById('gemini-api-key-input').value.trim();
-  runGoogleScript('saveGeminiApiKey', key)
-    .then(() => {
-      Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
-      checkGeminiStatus();
-    })
-    .catch(showError);
-}
-
-function checkGeminiStatus() {
-  runGoogleScript('hasGeminiApiKey')
-    .then(result => {
-      const el = document.getElementById('gemini-status');
-      if (el) {
-        el.innerHTML = result && result.hasKey
-          ? '<span class="text-success"><i class="bi bi-check-circle"></i> APIキー設定済み（AI問いかけ機能ON）</span>'
-          : '<span class="text-muted"><i class="bi bi-x-circle"></i> 未設定（設定するとAI問いかけ機能が有効になります）</span>';
-      }
-    })
-    .catch(() => {});
-}
-
-/**
- * Student Summaries (Teacher Report)
- */
-function loadStudentSummaries() {
-  if (!currentSession) {
-    Swal.fire('授業が選択されていません', '', 'warning');
-    return;
+    });
   }
-  const container = document.getElementById('summary-container');
-  container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> 読み込み中...</div>';
 
-  runGoogleScript('getStudentSummaries', currentSession.id)
-    .then(summaries => {
-      if (!summaries || summaries.length === 0) {
-        container.innerHTML = '<p class="text-muted small">まだ回答がありません</p>';
-        return;
-      }
-      container.innerHTML = summaries.map(s => {
-        const before = s.before ? `<span class="badge bg-primary me-1">${s.before.value}</span>${s.before.text || ''}` : '<span class="text-muted">未回答</span>';
-        const after = s.after ? `<span class="badge bg-danger me-1">${s.after.value}</span>${s.after.text || ''}` : '<span class="text-muted">未回答</span>';
-        const changed = s.before && s.after && s.before.value !== s.after.value;
-        return `<div class="border rounded p-2 mb-2 ${changed ? 'border-warning' : ''}">
+  function loadScatterData() {
+    if (!currentSession) return;
+
+    runGoogleScript('getSessionLogs', currentSession.id)
+      .then(logs => {
+        if (!scatterChart) return;
+        const beforeData = [];
+        const afterData = [];
+        logs.forEach(l => {
+          const y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5;
+          const point = { x: Number(l.value) || 0, y: y, text: l.text };
+          if (l.phase === 'AFTER') {
+            afterData.push(point);
+          } else {
+            beforeData.push(point);
+          }
+        });
+        scatterChart.data.datasets[0].data = beforeData;
+        scatterChart.data.datasets[1].data = afterData;
+        scatterChart.update();
+      })
+      .catch(console.error);
+  }
+
+  // ポーリング開始（教師: 散布図更新 / 生徒: フェーズ変更検知）
+  setInterval(() => {
+    if (localStorage.getItem('isTeacher') === 'true' && currentSession) {
+      loadScatterData();
+    } else {
+      checkPhaseUpdate();
+    }
+  }, 5000);
+
+  /**
+   * AI Socrates (Gemini Integration)
+   */
+  function requestAiFeedback(sessionTitle, text, inputType, value) {
+    runGoogleScript('generateSocraticQuestion', sessionTitle, text, inputType, value)
+      .then(result => {
+        if (result && result.success && result.question) {
+          const card = document.getElementById('ai-feedback-card');
+          const textEl = document.getElementById('ai-feedback-text');
+          if (card && textEl) {
+            textEl.innerText = result.question;
+            card.classList.remove('d-none');
+          }
+        }
+      })
+      .catch(() => { }); // AIフィードバックは失敗しても無視
+  }
+
+  /**
+   * Gemini API Key Management (Teacher)
+   */
+  function saveApiKey() {
+    const key = document.getElementById('gemini-api-key-input').value.trim();
+    runGoogleScript('saveGeminiApiKey', key)
+      .then(() => {
+        Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+        checkGeminiStatus();
+      })
+      .catch(showError);
+  }
+
+  function checkGeminiStatus() {
+    runGoogleScript('hasGeminiApiKey')
+      .then(result => {
+        const el = document.getElementById('gemini-status');
+        if (el) {
+          el.innerHTML = result && result.hasKey
+            ? '<span class="text-success"><i class="bi bi-check-circle"></i> APIキー設定済み（AI問いかけ機能ON）</span>'
+            : '<span class="text-muted"><i class="bi bi-x-circle"></i> 未設定（設定するとAI問いかけ機能が有効になります）</span>';
+        }
+      })
+      .catch(() => { });
+  }
+
+  /**
+   * Student Summaries (Teacher Report)
+   */
+  function loadStudentSummaries() {
+    if (!currentSession) {
+      Swal.fire('授業が選択されていません', '', 'warning');
+      return;
+    }
+    const container = document.getElementById('summary-container');
+    container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> 読み込み中...</div>';
+
+    runGoogleScript('getStudentSummaries', currentSession.id)
+      .then(summaries => {
+        if (!summaries || summaries.length === 0) {
+          container.innerHTML = '<p class="text-muted small">まだ回答がありません</p>';
+          return;
+        }
+        container.innerHTML = summaries.map(s => {
+          const before = s.before ? `<span class="badge bg-primary me-1">${s.before.value}</span>${s.before.text || ''}` : '<span class="text-muted">未回答</span>';
+          const after = s.after ? `<span class="badge bg-danger me-1">${s.after.value}</span>${s.after.text || ''}` : '<span class="text-muted">未回答</span>';
+          const changed = s.before && s.after && s.before.value !== s.after.value;
+          return `<div class="border rounded p-2 mb-2 ${changed ? 'border-warning' : ''}">
           <div class="fw-bold">${s.name} <small class="text-muted">(${s.ruby})</small> ${changed ? '<span class="badge bg-warning text-dark">変化あり</span>' : ''}</div>
           <div class="small mt-1"><span class="text-primary">導入:</span> ${before}</div>
           <div class="small"><span class="text-danger">振り返り:</span> ${after}</div>
         </div>`;
-      }).join('');
-    })
-    .catch(showError);
-}
+        }).join('');
+      })
+      .catch(showError);
+  }
 
-/**
- * My Log (Student History)
- */
-function showMyLog() {
-  if (!currentUser) return;
-  showView('view-mylog');
+  /**
+   * My Log (Student History)
+   */
+  /**
+   * My Log (Student History)
+   */
+  function showMyLog() {
+    if (!currentUser) return;
+    showView('view-mylog');
 
-  runGoogleScript('getAllSessions')
-    .then(sessions => {
-      if (!sessions || sessions.length === 0) {
-        document.getElementById('mylog-list').innerHTML = '<p class="text-muted">まだ記録がありません</p>';
-        return;
+    // Reset chart
+    if (window.myPortfolioChartInstance) {
+      try {
+        window.myPortfolioChartInstance.destroy();
+      } catch (e) { console.warn(e); }
+      window.myPortfolioChartInstance = null;
+    }
+    document.getElementById('mylog-list').innerHTML = '<div class="text-center text-muted"><div class="spinner-border spinner-border-sm"></div> 読み込み中...</div>';
+
+    runGoogleScript('getStudentPortfolio', currentUser.id)
+      .then(portfolio => {
+        if (!portfolio || portfolio.length === 0) {
+          document.getElementById('mylog-list').innerHTML = '<p class="text-muted text-center pt-3">まだ記録がありません</p>';
+          return;
+        }
+
+        // 1. Render Chart (Slider only)
+        renderPortfolioChart(portfolio);
+
+        // 2. Render List
+        const html = portfolio.map(item => {
+          const dateStr = item.date ? new Date(item.date).toLocaleDateString('ja-JP') : '';
+          let body = '';
+
+          // Before
+          if (item.before) {
+            const valDisplay = item.inputType === 'SLIDER'
+              ? `<span class="badge bg-primary">${item.before.value}</span>`
+              : `<span class="badge bg-primary text-wrap">${item.before.value}</span>`;
+            body += `<div class="small mb-1"><span class="fw-bold me-2">導入</span> ${valDisplay} ${item.before.text ? '「' + item.before.text + '」' : ''}</div>`;
+          }
+
+          // After
+          if (item.after) {
+            const valDisplay = item.inputType === 'SLIDER'
+              ? `<span class="badge bg-danger">${item.after.value}</span>`
+              : `<span class="badge bg-danger text-wrap">${item.after.value}</span>`;
+            body += `<div class="small"><span class="fw-bold me-2">振り返り</span> ${valDisplay} ${item.after.text ? '「' + item.after.text + '」' : ''}</div>`;
+          }
+
+          return `<div class="card mb-2">
+          <div class="card-body py-2">
+            <div class="d-flex justify-content-between">
+              <span class="fw-bold text-truncate">${item.title}</span>
+              <small class="text-muted">${dateStr}</small>
+            </div>
+            <hr class="my-1">
+            ${body}
+          </div>
+        </div>`;
+        }).join('');
+
+        document.getElementById('mylog-list').innerHTML = html;
+      })
+      .catch(showError);
+  }
+
+  function renderPortfolioChart(portfolio) {
+    // Filter for SLIDER sessions
+    const data = portfolio.filter(p => p.inputType === 'SLIDER').reverse(); // Chronological order
+    if (data.length === 0) return;
+
+    const ctx = document.getElementById('portfolioChart');
+    if (!ctx) return; // Canvas element needs to be added to index.html
+
+    window.myPortfolioChartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.map(d => new Date(d.date).toLocaleDateString('ja-JP')),
+        datasets: [
+          {
+            label: '導入',
+            data: data.map(d => d.before ? d.before.value : null),
+            borderColor: 'rgba(26, 115, 232, 0.6)',
+            backgroundColor: 'rgba(26, 115, 232, 0.6)',
+            tension: 0.1,
+            spanGaps: true
+          },
+          {
+            label: '振り返り',
+            data: data.map(d => d.after ? d.after.value : null),
+            borderColor: 'rgba(234, 67, 53, 0.6)',
+            backgroundColor: 'rgba(234, 67, 53, 0.6)',
+            tension: 0.1,
+            spanGaps: true
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { min: 0, max: 100 }
+        },
+        plugins: {
+          legend: { position: 'top' },
+          title: { display: true, text: '心の位置の変化' }
+        }
       }
-      // 各セッションの自分のログを取得
-      const promises = sessions.map(session =>
-        runGoogleScript('getStudentLogs', session.id, currentUser.id)
-          .then(logs => ({ session, logs }))
-      );
-      Promise.all(promises).then(results => {
-        const html = results
-          .filter(r => r.logs.length > 0)
-          .map(r => {
-            const s = r.session;
-            const beforeLog = r.logs.find(l => l.phase === 'BEFORE');
-            const afterLog = r.logs.find(l => l.phase === 'AFTER');
-            const dateStr = s.date ? new Date(s.date).toLocaleDateString('ja-JP') : '';
-            let body = '';
-            if (beforeLog) {
-              body += `<div class="small"><span class="badge bg-primary">導入</span> ${beforeLog.value || ''} ${beforeLog.text ? '「' + beforeLog.text + '」' : ''}</div>`;
-            }
-            if (afterLog) {
-              body += `<div class="small mt-1"><span class="badge bg-danger">振り返り</span> ${afterLog.value || ''} ${afterLog.text ? '「' + afterLog.text + '」' : ''}</div>`;
-            }
-            return `<div class="card mb-2"><div class="card-body py-2">
-              <div class="fw-bold">${s.title} <small class="text-muted">${dateStr}</small></div>
-              ${body}
-            </div></div>`;
-          }).join('');
-        document.getElementById('mylog-list').innerHTML = html || '<p class="text-muted">まだ記録がありません</p>';
-      });
-    })
-    .catch(err => {
-      console.error(err);
-      document.getElementById('mylog-list').innerHTML = '<p class="text-muted">読み込みに失敗しました</p>';
     });
-}
+  }
 
-/**
- * GAS Wrapper (GIGA Standard)
- */
-function runGoogleScript(funcName, ...args) {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler(resolve)
-      .withFailureHandler(reject)
+  function backFromMyLog() {
+    if (currentSession) {
+      if (currentPhase === 'AFTER') {
+        showReflectionView();
+      } else {
+        showView('view-entry');
+      }
+    } else {
+      showView('view-waiting');
+    }
+  }
+
+  /**
+   * Unit Management Functions
+   */
+  function loadUnits() {
+    const container = document.getElementById('unit-list-container');
+    if (!container) return;
+
+    container.innerHTML = '<div class="text-center text-muted py-3"><div class="spinner-border spinner-border-sm"></div> 読み込み中...</div>';
+
+    runGoogleScript('getUnits')
+      .then(units => {
+        if (!units || units.length === 0) {
+          container.innerHTML = '<div class="text-center text-muted py-3">登録された単元はありません</div>';
+          return;
+        }
+
+        container.innerHTML = units.map(u => {
+          const typeLabel = u.inputType === 'SLIDER' ? '<span class="badge bg-info text-dark">スライダー</span>' : '<span class="badge bg-warning text-dark">感情タグ</span>';
+          const dateStr = new Date(u.createdAt).toLocaleDateString();
+
+          return `<a href="#" class="list-group-item list-group-item-action" onclick="editUnit('${u.unitId}'); return false;">
+          <div class="d-flex w-100 justify-content-between">
+            <h6 class="mb-1 fw-bold text-primary">${u.title}</h6>
+            <small class="text-muted">${dateStr}</small>
+          </div>
+          <p class="mb-1 small">${typeLabel} ${u.memo ? ' - ' + u.memo : ''}</p>
+          <div class="mt-2 text-end">
+            <button class="btn btn-sm btn-outline-danger me-1" onclick="deleteUnit(event, '${u.unitId}')">削除</button>
+            <button class="btn btn-sm btn-success" onclick="startUnit(event, '${u.unitId}')">この単元で開始</button>
+          </div>
+        </a>`;
+        }).join('');
+      })
+      .catch(showError);
+  }
+
+  function importUnitFromPdf() {
+    const input = document.getElementById('pdf-file-id');
+    let val = input.value.trim();
+    if (!val) {
+      Swal.fire('ファイルIDまたはURLを入力してください', '', 'warning');
+      return;
+    }
+
+    // URLならID抽出 (簡易版)
+    const match = val.match(/[-\w]{25,}/);
+    if (match) val = match[0];
+
+    Swal.fire({
+      title: 'AI解析中...',
+      text: 'PDFから授業設定を読み取っています',
+      didOpen: () => Swal.showLoading()
+    });
+
+    runGoogleScript('parseLessonPdf', val)
+      .then(result => {
+        if (result && result.success && result.data) {
+          Swal.close();
+          // フォームに反映
+          const d = result.data;
+          document.getElementById('edit-unit-id').value = ''; // 新規扱い
+          document.getElementById('edit-unit-title').value = d.title || '';
+          document.getElementById('edit-unit-type').value = d.inputType || 'SLIDER';
+          document.getElementById('edit-unit-memo').value = d.memo || '';
+
+          toggleUnitEditOptions();
+
+          if (d.inputType === 'SLIDER' && d.options) {
+            document.getElementById('edit-unit-min').value = d.options.minLabel || '';
+            document.getElementById('edit-unit-max').value = d.options.maxLabel || '';
+          } else if (d.inputType === 'TAGS' && d.options && d.options.tags) {
+            document.getElementById('edit-unit-tags').value = d.options.tags.join(',');
+          }
+
+          Swal.fire({
+            icon: 'success',
+            title: '読み取り成功',
+            text: '内容を確認・修正して「保存する」を押してください'
+          });
+        } else {
+          throw new Error(result.error || '解析に失敗しました');
+        }
+      })
+      .catch(showError);
+  }
+
+  function toggleUnitEditOptions() {
+    const type = document.getElementById('edit-unit-type').value;
+    document.getElementById('edit-unit-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
+    document.getElementById('edit-unit-opts-tags').classList.toggle('d-none', type !== 'TAGS');
+  }
+
+  function clearUnitForm() {
+    document.getElementById('edit-unit-id').value = '';
+    document.getElementById('edit-unit-title').value = '';
+    document.getElementById('edit-unit-min').value = '';
+    document.getElementById('edit-unit-max').value = '';
+    document.getElementById('edit-unit-tags').value = '';
+    document.getElementById('edit-unit-memo').value = '';
+  }
+
+  function editUnit(unitId) {
+    // 編集モードとしてフォームにセット（リストからデータを引くのが早いが、ここでは再度取得せずDOMから...いや、リストにあるデータを使おう）
+    runGoogleScript('getUnits').then(units => {
+      const u = units.find(x => x.unitId === unitId);
+      if (!u) return;
+
+      document.getElementById('edit-unit-id').value = u.unitId;
+      document.getElementById('edit-unit-title').value = u.title;
+      document.getElementById('edit-unit-type').value = u.inputType;
+      document.getElementById('edit-unit-memo').value = u.memo;
+
+      toggleUnitEditOptions();
+
+      if (u.inputType === 'SLIDER') {
+        document.getElementById('edit-unit-min').value = u.options.minLabel || '';
+        document.getElementById('edit-unit-max').value = u.options.maxLabel || '';
+      } else {
+        document.getElementById('edit-unit-tags').value = (u.options.tags || []).join(',');
+      }
+    });
+  }
+
+  function saveUnitForm() {
+    const id = document.getElementById('edit-unit-id').value;
+    const title = document.getElementById('edit-unit-title').value;
+    if (!title) { Swal.fire('タイトルを入力してください', '', 'warning'); return; }
+
+    const type = document.getElementById('edit-unit-type').value;
+    let options = {};
+
+    if (type === 'SLIDER') {
+      options = {
+        minLabel: document.getElementById('edit-unit-min').value || 'A',
+        maxLabel: document.getElementById('edit-unit-max').value || 'B',
+        tags: []
+      };
+    } else {
+      const tVal = document.getElementById('edit-unit-tags').value;
+      options = {
+        tags: tVal ? tVal.split(/[,、，]/) : ['A', 'B']
+      };
+    }
+
+    const memo = document.getElementById('edit-unit-memo').value;
+
+    const payload = {
+      unitId: id,
+      title: title,
+      inputType: type,
+      options: options,
+      memo: memo
+    };
+
+    Swal.fire({ title: '保存中...', didOpen: () => Swal.showLoading() });
+
+    runGoogleScript('saveUnit', payload)
+      .then(() => {
+        Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+        clearUnitForm();
+        loadUnits();
+      })
+      .catch(showError);
+  }
+
+  function deleteUnit(event, unitId) {
+    event.stopPropagation();
+    if (!confirm('本当に削除しますか？')) return;
+
+    runGoogleScript('deleteUnit', unitId)
+      .then(() => loadUnits())
+      .catch(showError);
+  }
+
+  function startUnit(event, unitId) {
+    event.stopPropagation();
+    Swal.fire({
+      title: 'この単元で授業を始めますか？',
+      text: '現在進行中の授業は終了されます',
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: '開始する'
+    }).then(res => {
+      if (res.isConfirmed) {
+        Swal.fire({ title: '準備中...', didOpen: () => Swal.showLoading() });
+        runGoogleScript('startSessionFromUnit', unitId)
+          .then(() => {
+            Swal.fire({ icon: 'success', title: '授業を開始しました', text: '生徒画面が更新されます' });
+            // 画面更新
+            runGoogleScript('getInitialData').then(response => {
+              if (response && response.success && response.activeSession) {
+                currentSession = response.activeSession;
+                loadScatterData();
+              }
+            });
+          })
+          .catch(showError);
+      }
+    });
+  }
+
+  /**
+   * GAS Wrapper (GIGA Standard)
+   */
+  function runGoogleScript(funcName, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(reject)
       [funcName](...args);
-  });
-}
+    });
+  }
 
-function showError(err) {
-  console.error(err);
-  Swal.fire({
-    icon: 'error',
-    title: 'エラー',
-    text: '通信に失敗しました: ' + err.toString()
-  });
-}
+
+  /**
+   * SPA Navigation (No Reload)
+   */
+  function resetApp() {
+    // 状態クリア
+    currentUser = null;
+    currentSession = null;
+    currentPhase = 'BEFORE';
+    if (scatterChart) {
+      scatterChart.destroy();
+      scatterChart = null;
+    }
+
+    // UI初期化
+    document.getElementById('loading').classList.remove('d-none');
+    const allViews = document.querySelectorAll('[id^="view-"]');
+    allViews.forEach(el => el.classList.add('d-none'));
+
+    // データ再取得
+    // イベントリスナー等はそのまま再利用
+    // dispatchEventと同等の処理をDOMContentLoadedのコールバック直下から抽出して関数化すべきだが、
+    // ここでは簡易的にDOMContentLoadedの中身相当を再実行する形をとるか、
+    // あるいは reload の代わりに init 処理を呼ぶ。
+
+    // 既存のDOMContentLoadedロジックを関数化していないため、
+    // 簡易的にlocation.reload()の代替として初期化ロジックを走らせる。
+    // ただし、EventListenerは二重登録しないように注意が必要。
+
+    // ここでは主要な初期化フローを再実行する
+    initAppFlow();
+  }
+
+  // 既存のDOMContentLoadedを関数に切り出し
+  function initAppFlow() {
+    // 1. 先生モード判定
+    const isTeacher = localStorage.getItem('isTeacher') === 'true';
+    const loader = document.getElementById('loading');
+    if (loader) loader.classList.remove('d-none');
+
+    if (isTeacher) {
+      showView('view-teacher');
+    }
+
+    // 3. データ取得開始
+    runGoogleScript('getInitialData')
+      .then(response => {
+        if (loader) loader.classList.add('d-none');
+
+        if (!response || !response.success) {
+          throw new Error(response ? response.error : 'データ取得失敗');
+        }
+
+        const data = response;
+
+        // 先生ならロジック終了
+        if (isTeacher) {
+          if (data.activeSession) {
+            currentSession = data.activeSession;
+            updatePhaseButtons(currentSession.phase || 'BEFORE');
+          } else {
+            currentSession = null;
+            updatePhaseButtons('CLOSED'); // デフォルト状態
+          }
+          renderRoster(data.users);
+          initChart();
+          loadScatterData();
+          checkGeminiStatus();
+          return;
+        }
+
+        // 生徒用ロジック
+        const select = document.getElementById('student-select');
+        if (data.users && Array.isArray(data.users) && data.users.length > 0) {
+          select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
+          data.users.forEach(u => {
+            const option = document.createElement('option');
+            option.value = u.id;
+            option.innerHTML = `${u.name} <small>(${u.ruby})</small>`;
+            select.appendChild(option);
+          });
+        }
+
+        // 共通: ログイン状態の復元
+        const storedUid = localStorage.getItem('studentId');
+        if (storedUid) {
+          currentUser = { id: storedUid };
+        }
+
+        if (data.activeSession) {
+          currentSession = data.activeSession;
+          currentPhase = currentSession.phase || 'BEFORE';
+          setupSessionUI(currentSession);
+
+          const phaseLabels = { BEFORE: '今の考えを教えてね', AFTER: '振り返りの時間です' };
+          const phaseLabel = document.getElementById('phase-label');
+          if (phaseLabel && phaseLabels[currentPhase]) {
+            phaseLabel.innerHTML = phaseLabels[currentPhase];
+          }
+
+          if (storedUid) {
+            if (currentPhase === 'AFTER') {
+              showReflectionView();
+            } else {
+              showView('view-entry');
+            }
+          } else {
+            showView('view-login');
+          }
+        } else {
+          // セッションがない場合
+          if (storedUid) {
+            showView('view-waiting'); // ログイン済みなら待機画面へ（ここからポートフォリオが見れる）
+          } else {
+            showView('view-login'); // 未ログインならログイン画面へ（本来は待機画面でいいが、名前を選ばせたいならLoginへ。しかしSessionがないとLoginしても進めない...いや、LoginだけさせてWaitingに行かせればいい）
+            // 修正案: Sessionがないときは Login画面で名前を選ばせても、始まらないので意味がない？
+            // いや、名前を選んで「授業を始める」ボタンを押しても、Sessionがないとエラーになるか、Waitingに行くだけ。
+            // 待機画面に「ログイン」ボタンはない。
+            // したがって、Sessionがないときは「ログイン画面」を表示し、名前を選んでボタンを押したら「currentUserをセットしてWaiting画面へ」というフローが必要。
+
+            // 現状の login() 関数は activeSession を前提としているか確認が必要。
+            // login() 関数を見ると:
+            //   if (!currentSession) { Alert('授業が始まっていません'); return; }
+            // となっている。これではSessionがないときにログインできない。
+
+            // 対策: Sessionがなくてもログイン（名札選択）できるようにする、または
+            // ポートフォリオを見るためには「誰か」を特定する必要がある。
+            // Sessionがない状態でポートフォリオを見るには？
+            // view-login で名前を選ばせる -> ポートフォリオボタンを押す -> currentUserセット -> showMyLog
+            // あるいは、view-waiting に「名前を選ぶ」機能をつけるか。
+
+            // 今回はシンプルに:
+            // 1. storedUid があれば view-waiting (ポートフォリオボタンあり)
+            // 2. なければ view-login (ただし login() は Session必須なので、ポートフォリオ専用のログインフローが必要？)
+            // いや、login() のチェックを緩和すればいい。
+
+            // とりあえずここは storedUid がなければ view-login に飛ばす。
+            // login() の修正も必要。
+            showView('view-login');
+          }
+        }
+      })
+      .catch(err => {
+        if (loader) loader.classList.add('d-none');
+        console.error(err);
+        Swal.fire({
+          icon: 'error',
+          title: '通信エラー',
+          text: '再読み込みしますか？',
+          showCancelButton: true,
+          confirmButtonText: '再読み込み',
+        }).then((result) => {
+          if (result.isConfirmed) {
+            resetApp();
+          }
+        });
+      });
+  }
+
+  function showError(err) {
+    console.error(err);
+    Swal.fire({
+      icon: 'error',
+      title: 'エラー',
+      text: '通信に失敗しました: ' + err.toString()
+    });
+  }
+
+  /**
+   * Drive Picker Functions
+   */
+  function openDrivePicker() {
+    if (!pickerModal) {
+      pickerModal = new bootstrap.Modal(document.getElementById('drivePickerModal'));
+    }
+    pickerModal.show();
+    loadDriveItems(null); // Load root
+  }
+
+  function loadDriveItems(folderId) {
+    const list = document.getElementById('picker-list');
+    list.innerHTML = '<div class="text-center py-5"><div class="spinner-border spinner-border-sm text-secondary"></div> 読み込み中...</div>';
+
+    runGoogleScript('getDriveFiles', folderId)
+      .then(result => {
+        if (result.success) {
+          currentPickerFolderId = result.currentFolderId;
+          parentPickerFolderId = result.parentFolderId;
+          document.getElementById('picker-path').innerText = result.currentFolderName;
+          document.getElementById('picker-up-btn').disabled = !result.parentFolderId;
+          renderDriveItems(result.items);
+        } else {
+          list.innerHTML = `<div class="p-3 text-danger">エラー: ${result.error}</div>`;
+        }
+      })
+      .catch(err => {
+        list.innerHTML = `<div class="p-3 text-danger">通信エラー: ${err}</div>`;
+      });
+  }
+
+  function renderDriveItems(items) {
+    const list = document.getElementById('picker-list');
+    if (!items || items.length === 0) {
+      list.innerHTML = '<div class="p-3 text-muted text-center">フォルダは空です</div>';
+      return;
+    }
+
+    list.innerHTML = items.map(item => {
+      const icon = item.type === 'folder'
+        ? '<i class="bi bi-folder-fill text-warning fs-5"></i>'
+        : '<i class="bi bi-file-earmark-pdf-fill text-danger fs-5"></i>';
+
+      const action = item.type === 'folder'
+        ? `onclick="loadDriveItems('${item.id}')"`
+        : `onclick="selectDriveItem('${item.id}', '${item.name}')"`;
+
+      const cursor = 'cursor: pointer;';
+      const bgHover = 'list-group-item-action';
+
+      return `
+        <div class="list-group-item ${bgHover} d-flex align-items-center py-2" ${action} style="${cursor}">
+          <div class="me-3">${icon}</div>
+          <div class="flex-grow-1 text-truncate">
+            ${item.name}
+          </div>
+          ${item.type === 'file' ? '<button class="btn btn-sm btn-outline-primary">選択</button>' : '<i class="bi bi-chevron-right text-muted"></i>'}
+        </div>
+      `;
+    }).join('');
+  }
+
+  function goUpDriveFolder() {
+    if (parentPickerFolderId) {
+      loadDriveItems(parentPickerFolderId);
+    }
+  }
+
+  function selectDriveItem(id, name) {
+    document.getElementById('pdf-file-id').value = id;
+    if (pickerModal) pickerModal.hide();
+  }
 </script>
