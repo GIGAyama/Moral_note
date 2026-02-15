@@ -1,5 +1,5 @@
 /**
- * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v1.3)
+ * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v2.0)
  * GIGA Standard v2 Compliant
  */
 
@@ -224,6 +224,8 @@ function getSessionLogs(sessionId) {
   const logs = rawData.slice(1)
     .filter(r => r[1] === sessionId && !r[7])
     .map(r => ({
+      logId: r[0],
+      studentId: r[2],
       phase: r[3],
       value: r[4],
       text: r[5]
@@ -341,6 +343,147 @@ function deleteStudent(studentId) {
     }
   }
   return { success: false, error: '生徒が見つかりません' };
+}
+
+/* ==============================================
+   Gemini API Integration (AI Socrates)
+   ============================================== */
+
+/**
+ * Gemini APIで問いかけを生成する
+ * APIキーが未設定ならスキップ
+ */
+function generateSocraticQuestion(sessionTitle, studentText, inputType, studentValue) {
+  const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
+  if (!apiKey) {
+    return { success: false, reason: 'NO_API_KEY' };
+  }
+
+  const prompt = `あなたは小学校の道徳の授業で、子供たちの「深い思考」を引き出すソクラテス的対話の専門家です。
+
+【授業テーマ】${sessionTitle}
+【子供の回答】${studentText || '（記述なし）'}
+【入力タイプ】${inputType === 'SLIDER' ? 'スライダー（値: ' + studentValue + '/100）' : inputType}
+
+以下のルールに従い、この子供に対して1つだけ「問いかけ」を生成してください：
+- 小学3〜6年生が理解できるやさしい日本語で書く
+- 40文字以内の短い問いかけにする
+- 答えを誘導せず、考えを広げる問いにする
+- 「なぜ？」「もし〜だったら？」「具体的には？」のいずれかのパターンを使う
+- 記述が空や極端に短い場合は、まず自分の考えを言葉にするよう促す
+
+問いかけのみを出力してください（説明や前置き不要）。`;
+
+  try {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 100, temperature: 0.7 }
+    };
+
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const json = JSON.parse(response.getContentText());
+    if (json.candidates && json.candidates[0] && json.candidates[0].content) {
+      const question = json.candidates[0].content.parts[0].text.trim();
+      return { success: true, question: question };
+    }
+    return { success: false, reason: 'NO_RESPONSE' };
+  } catch (e) {
+    console.error('Gemini API Error:', e);
+    return { success: false, reason: e.toString() };
+  }
+}
+
+/**
+ * Gemini APIキーを保存する（教師用）
+ */
+function saveGeminiApiKey(apiKey) {
+  SCRIPT_PROP.setProperty('GEMINI_API_KEY', apiKey || '');
+  return { success: true };
+}
+
+/**
+ * Gemini APIキーが設定済みか確認
+ */
+function hasGeminiApiKey() {
+  const key = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
+  return { hasKey: !!(key && key.length > 0) };
+}
+
+/* ==============================================
+   Session History (Phase 4: My Log & Reports)
+   ============================================== */
+
+/**
+ * 全授業一覧を取得
+ */
+function getAllSessions() {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  return sheet.getDataRange().getValues().slice(1)
+    .filter(r => !r[7])
+    .map(r => {
+      let opts = {};
+      try { opts = r[4] ? JSON.parse(r[4]) : {}; } catch(e) {}
+      return {
+        id: r[0],
+        date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]),
+        title: r[2],
+        inputType: r[3],
+        options: opts,
+        status: r[5],
+        phase: r[6] || 'BEFORE'
+      };
+    });
+}
+
+/**
+ * 教師用: 全生徒の変容サマリーを取得
+ */
+function getStudentSummaries(sessionId) {
+  const ss = getDB();
+  const logSheet = ss.getSheetByName('記録');
+  const userSheet = ss.getSheetByName('名簿');
+  if (!logSheet || logSheet.getLastRow() <= 1) return [];
+
+  // 名簿をマップ化
+  const users = {};
+  if (userSheet && userSheet.getLastRow() > 1) {
+    userSheet.getDataRange().getValues().slice(1)
+      .filter(r => !r[3])
+      .forEach(r => { users[r[0]] = { name: r[1], ruby: r[2] }; });
+  }
+
+  // ログを生徒ごとに集計
+  const logData = logSheet.getDataRange().getValues().slice(1)
+    .filter(r => r[1] === sessionId && !r[7]);
+
+  const grouped = {};
+  logData.forEach(r => {
+    const sid = r[2];
+    if (!grouped[sid]) grouped[sid] = {};
+    grouped[sid][r[3]] = {
+      value: r[4],
+      text: r[5],
+      timestamp: r[6] instanceof Date ? r[6].toISOString() : String(r[6])
+    };
+  });
+
+  return Object.keys(grouped).map(sid => ({
+    studentId: sid,
+    name: users[sid] ? users[sid].name : sid,
+    ruby: users[sid] ? users[sid].ruby : '',
+    before: grouped[sid]['BEFORE'] || null,
+    after: grouped[sid]['AFTER'] || null
+  }));
 }
 
 /**

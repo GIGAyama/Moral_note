@@ -115,6 +115,14 @@
             <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
           </div>
         </div>
+
+        <!-- AIフィードバック -->
+        <div id="ai-feedback-card" class="card shadow-sm d-none mt-3 border-warning">
+          <div class="card-body">
+            <h6 class="text-warning mb-2"><i class="bi bi-robot"></i> AI<ruby>先生<rt>せんせい</rt></ruby>からの<ruby>問<rt>と</rt></ruby>いかけ</h6>
+            <p id="ai-feedback-text" class="fw-bold mb-0"></p>
+          </div>
+        </div>
       </div>
 
       <!-- View: 振り返り (Reflection) -->
@@ -175,6 +183,31 @@
             <i class="bi bi-check-circle text-success" style="font-size: 4rem;"></i>
             <h3 class="mt-3"><ruby>送信<rt>そうしん</rt></ruby><ruby>完了<rt>かんりょう</rt></ruby>！</h3>
             <p class="text-muted"><ruby>先生<rt>せんせい</rt></ruby>の<ruby>指示<rt>しじ</rt></ruby>を<ruby>待<rt>ま</rt></ruby>ってね</p>
+            <button class="btn btn-outline-primary btn-sm mt-3" onclick="showMyLog()">
+              <i class="bi bi-journal-text"></i> <ruby>自分<rt>じぶん</rt></ruby>の<ruby>記録<rt>きろく</rt></ruby>を<ruby>見<rt>み</rt></ruby>る
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- View: My Log (個人の歩み) -->
+      <div id="view-mylog" class="d-none">
+        <div class="card shadow-sm mb-3">
+          <div class="card-header bg-info text-white">
+            <h5 class="mb-0"><i class="bi bi-journal-text"></i> <ruby>自分<rt>じぶん</rt></ruby>の<ruby>記録<rt>きろく</rt></ruby></h5>
+          </div>
+          <div class="card-body">
+            <div id="mylog-list">
+              <div class="text-center text-muted">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <ruby>読<rt>よ</rt></ruby>み<ruby>込<rt>こ</rt></ruby>み<ruby>中<rt>ちゅう</rt></ruby>...
+              </div>
+            </div>
+            <div class="text-center mt-3">
+              <a href="#" class="text-muted small" onclick="showView('view-done'); return false;">
+                <i class="bi bi-arrow-left"></i> <ruby>戻<rt>もど</rt></ruby>る
+              </a>
+            </div>
           </div>
         </div>
       </div>
@@ -195,19 +228,32 @@
             <!-- 新規授業作成 -->
             <h6 class="border-bottom pb-2">新しい授業を始める</h6>
             <div class="row g-2 mb-3">
-              <div class="col-md-4">
+              <div class="col-md-5">
                 <input type="text" class="form-control" id="new-session-title" placeholder="教材名・ねらい">
               </div>
               <div class="col-md-4">
-                <select class="form-select" id="new-session-type">
+                <select class="form-select" id="new-session-type" onchange="toggleSessionOptions()">
                   <option value="SLIDER">スライダー (葛藤)</option>
                   <option value="TAGS">感情タグ (心情)</option>
                   <option value="TEXT">自由記述 (定義)</option>
                 </select>
               </div>
-              <div class="col-md-4">
+              <div class="col-md-3">
                 <button class="btn btn-success w-100" onclick="createNewSession()">開始</button>
               </div>
+            </div>
+            <!-- スライダーオプション -->
+            <div id="session-opts-slider" class="row g-2 mb-3">
+              <div class="col-6">
+                <input type="text" class="form-control form-control-sm" id="opt-slider-min" placeholder="左ラベル（例: 賛成）" value="賛成">
+              </div>
+              <div class="col-6">
+                <input type="text" class="form-control form-control-sm" id="opt-slider-max" placeholder="右ラベル（例: 反対）" value="反対">
+              </div>
+            </div>
+            <!-- タグオプション -->
+            <div id="session-opts-tags" class="mb-3 d-none">
+              <input type="text" class="form-control form-control-sm" id="opt-tags-list" placeholder="タグをカンマ区切り（例: 共感,疑問,納得,驚き）" value="共感,疑問,納得,驚き">
             </div>
 
             <!-- フェーズコントロール -->
@@ -230,6 +276,27 @@
             <div style="height: 300px;">
               <canvas id="scatterChart"></canvas>
             </div>
+
+            <!-- 変容サマリー -->
+            <h6 class="border-bottom pb-2 mt-4">
+              <i class="bi bi-people"></i> 生徒の変容サマリー
+              <button class="btn btn-sm btn-outline-primary ms-2" onclick="loadStudentSummaries()">読み込み</button>
+            </h6>
+            <div id="summary-container" class="mb-3" style="max-height: 400px; overflow-y: auto;">
+              <p class="text-muted small">「読み込み」を押すと、生徒の変容が表示されます</p>
+            </div>
+
+            <!-- Gemini API設定 -->
+            <h6 class="border-bottom pb-2 mt-4"><i class="bi bi-robot"></i> AI設定（Gemini）</h6>
+            <div class="row g-2 mb-3">
+              <div class="col">
+                <input type="password" class="form-control form-control-sm" id="gemini-api-key-input" placeholder="Gemini APIキーを入力">
+              </div>
+              <div class="col-auto">
+                <button class="btn btn-sm btn-outline-primary" onclick="saveApiKey()">保存</button>
+              </div>
+            </div>
+            <p class="text-muted small" id="gemini-status">確認中...</p>
 
             <!-- 名簿管理 -->
             <h6 class="border-bottom pb-2 mt-4">名簿管理</h6>
