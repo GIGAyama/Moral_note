@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <?!= include('css'); ?>
+  </head>
+  <body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-light bg-white shadow-sm fixed-top">
+      <div class="container-fluid">
+        <span class="navbar-brand mb-0 h1 text-primary">
+          <i class="bi bi-compass"></i> 
+          <ruby>ココロ<rt>こころ</rt></ruby>の<ruby>羅針盤<rt>らしんばん</rt></ruby>
+        </span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="toggleTeacherMode()">
+          <i class="bi bi-person-badge"></i> <ruby>先生<rt>せんせい</rt></ruby>
+        </button>
+      </div>
+    </nav>
+
+    <div class="container mt-5 pt-4 pb-5">
+      
+      <!-- Loading Spinner -->
+      <div id="loading" class="text-center mt-5">
+        <div class="spinner-border text-primary" role="status">
+          <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2 text-muted">
+          <ruby>準備中<rt>じゅんびちゅう</rt></ruby>...<br>
+          <small class="text-muted" style="font-size: 0.8rem;">(最初や復旧時は少し時間がかかります)</small>
+        </p>
+      </div>
+
+      <!-- View: ログイン (児童用) -->
+      <div id="view-login" class="d-none">
+        <div class="card shadow-sm mx-auto" style="max-width: 500px;">
+          <div class="card-body text-center">
+            <h3 class="card-title mb-4"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選<rt>えら</rt></ruby>んでね</h3>
+            <select id="student-select" class="form-select form-select-lg mb-3">
+              <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
+              <!-- JSで動的生成 -->
+            </select>
+            <button class="btn btn-primary btn-lg w-100" onclick="login()">
+              <ruby>授業<rt>じゅぎょう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>める
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- View: 待機画面 -->
+      <div id="view-waiting" class="d-none text-center mt-5">
+        <img src="https://cdn-icons-png.flaticon.com/512/7486/7486744.png" width="120" class="mb-3 opacity-50">
+        <h3><ruby>先生<rt>せんせい</rt></ruby>の<ruby>合図<rt>あいず</rt></ruby>を<ruby>待<rt>ま</rt></ruby>ってね</h3>
+        <p class="text-muted"><ruby>今<rt>いま</rt></ruby>は<ruby>授業<rt>じゅぎょう</rt></ruby>が<ruby>始<rt>はじ</rt></ruby>まっていません</p>
+        <button class="btn btn-outline-primary btn-sm mt-3" onclick="location.reload()">
+          <i class="bi bi-arrow-clockwise"></i> <ruby>再読込<rt>さいよみこ</rt></ruby>み
+        </button>
+      </div>
+
+      <!-- View: 入力画面 (メイン) -->
+      <div id="view-entry" class="d-none">
+        <div class="card shadow-sm mb-3">
+          <div class="card-header bg-primary text-white">
+            <h5 class="mb-0" id="session-title">タイトル</h5>
+          </div>
+          <div class="card-body">
+            
+            <!-- フェーズ表示 -->
+            <div class="alert alert-info py-2 mb-3">
+              <i class="bi bi-info-circle"></i> 
+              <span id="phase-label"><ruby>今<rt>いま</rt></ruby>の<ruby>考<rt>かんが</rt></ruby>えを<ruby>教<rt>おし</rt></ruby>えてね</span>
+            </div>
+
+            <!-- 入力フォーム: Slider Mode -->
+            <div id="input-mode-slider" class="d-none">
+              <div class="d-flex justify-content-between mb-2">
+                <span class="badge bg-secondary text-wrap" style="width: 45%;" id="slider-label-min">A</span>
+                <span class="badge bg-secondary text-wrap" style="width: 45%;" id="slider-label-max">B</span>
+              </div>
+              <input type="range" class="form-range custom-range py-3" min="0" max="100" step="1" id="input-slider" oninput="updateSliderColor(this.value)">
+              <div class="text-center mb-3">
+                <span id="slider-value-display" class="fw-bold h4">50</span>
+              </div>
+            </div>
+
+            <!-- 入力フォーム: Tags Mode -->
+            <div id="input-mode-tags" class="d-none mb-3">
+              <p class="text-muted small"><ruby>気持<rt>きも</rt></ruby>ちに<ruby>近<rt>ちか</rt></ruby>いものを<ruby>選<rt>えら</rt></ruby>ぼう</p>
+              <div id="tags-container" class="d-flex flex-wrap gap-2">
+                <!-- JSで生成 -->
+              </div>
+            </div>
+
+            <!-- 理由記述 -->
+            <div class="mb-3">
+              <label class="form-label"><ruby>理由<rt>りゆう</rt></ruby>や<ruby>考<rt>かんが</rt></ruby>え</label>
+              <textarea class="form-control" id="input-text" rows="4" placeholder="どうしてそう思ったの？"></textarea>
+            </div>
+
+            <button class="btn btn-primary w-100 btn-lg shadow" onclick="submitOpinion()">
+              <i class="bi bi-send"></i> <ruby>送信<rt>そうしん</rt></ruby>する
+            </button>
+          </div>
+        </div>
+
+        <!-- カラーマッチング用オーバーレイ -->
+        <div id="color-match-card" class="card shadow-sm d-none">
+          <div class="card-body text-center" id="color-match-bg" style="transition: background 0.5s;">
+            <h4><ruby>対話<rt>たいわ</rt></ruby>モード</h4>
+            <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- View: 先生用ダッシュボード -->
+      <div id="view-teacher" class="d-none">
+        <div class="card shadow-sm mb-4">
+          <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-speedometer2"></i> 先生用コントロール</span>
+            <button class="btn btn-sm btn-light" onclick="location.reload()">更新</button>
+          </div>
+          <div class="card-body">
+            <!-- 新規授業作成 -->
+            <h6 class="border-bottom pb-2">新しい授業を始める</h6>
+            <div class="row g-2 mb-3">
+              <div class="col-md-4">
+                <input type="text" class="form-control" id="new-session-title" placeholder="教材名・ねらい">
+              </div>
+              <div class="col-md-4">
+                <select class="form-select" id="new-session-type">
+                  <option value="SLIDER">スライダー (葛藤)</option>
+                  <option value="TAGS">感情タグ (心情)</option>
+                  <option value="TEXT">自由記述 (定義)</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <button class="btn btn-success w-100" onclick="createNewSession()">開始</button>
+              </div>
+            </div>
+
+            <!-- 散布図 (Chart.js) -->
+            <h6 class="border-bottom pb-2 mt-4">クラスの分布 (アノニマス・スキャッター)</h6>
+            <div style="height: 300px;">
+              <canvas id="scatterChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <footer class="text-center text-muted py-3 mt-4 border-top fixed-bottom bg-white">
+      <small>© 2026 ココロの羅針盤 <a href="https://note.com/cute_borage86" target="_blank" class="text-decoration-none text-muted">GIGA山</a></small>
+    </footer>
+
+    <!-- Bootstrap & Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <?!= include('js'); ?>
+  </body>
+</html>
