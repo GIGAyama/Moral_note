@@ -53,9 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
           updatePhaseButtons(currentSession.phase || 'BEFORE');
         }
         renderRoster(data.users);
-        initChart();      // チャート準備
+        initChart();       // チャート準備
         loadScatterData(); // データロード
-        return;           // ★重要: ここでリターンして生徒ロジックを遮断
+        checkGeminiStatus(); // AI設定確認
+        return;            // ★重要: ここでリターンして生徒ロジックを遮断
       }
 
       // --- 以下、生徒用ロジック ---
@@ -251,6 +252,12 @@ function submitOpinion() {
       document.getElementById('input-text').value = '';
       selectedTag = '';
       document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
+
+      // AIフィードバックを非同期で取得
+      document.getElementById('ai-feedback-card').classList.add('d-none');
+      if (currentSession) {
+        requestAiFeedback(currentSession.title, text, currentSession.inputType, val);
+      }
     })
     .catch(showError);
 }
@@ -285,17 +292,27 @@ function toggleTeacherMode() {
   }
 }
 
+function toggleSessionOptions() {
+  const type = document.getElementById('new-session-type').value;
+  document.getElementById('session-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
+  document.getElementById('session-opts-tags').classList.toggle('d-none', type !== 'TAGS');
+}
+
 function createNewSession() {
   const title = document.getElementById('new-session-title').value;
   if (!title) { Swal.fire('タイトルを入れてね', '', 'warning'); return; }
 
   const type = document.getElementById('new-session-type').value;
   let options = {};
-  
+
   if (type === 'SLIDER') {
-    options = { minLabel: '賛成', maxLabel: '反対', tags: [] };
+    const minLabel = document.getElementById('opt-slider-min').value.trim() || '賛成';
+    const maxLabel = document.getElementById('opt-slider-max').value.trim() || '反対';
+    options = { minLabel: minLabel, maxLabel: maxLabel, tags: [] };
   } else if (type === 'TAGS') {
-    options = { tags: ['共感', '疑問', '納得', '驚き'] };
+    const tagsStr = document.getElementById('opt-tags-list').value.trim();
+    const tags = tagsStr ? tagsStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['共感', '疑問', '納得', '驚き'];
+    options = { tags: tags };
   }
 
   Swal.fire({ title: '授業を作成中...', didOpen: () => Swal.showLoading() });
@@ -598,32 +615,54 @@ function reloadRoster() {
 /**
  * Chart.js Logic
  */
+function simpleHash(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
 function initChart() {
   const ctx = document.getElementById('scatterChart').getContext('2d');
   scatterChart = new Chart(ctx, {
     type: 'scatter',
     data: {
-      datasets: [{
-        label: 'クラスの分布',
-        data: [],
-        backgroundColor: 'rgba(26, 115, 232, 0.6)'
-      }]
+      datasets: [
+        {
+          label: '導入（BEFORE）',
+          data: [],
+          backgroundColor: 'rgba(26, 115, 232, 0.6)',
+          pointRadius: 8
+        },
+        {
+          label: '振り返り（AFTER）',
+          data: [],
+          backgroundColor: 'rgba(234, 67, 53, 0.6)',
+          pointRadius: 8
+        }
+      ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
         x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
-        y: { display: false }
+        y: { min: 0, max: 10, display: false }
       },
       plugins: {
         tooltip: {
           callbacks: {
             label: function(context) {
-              return context.raw.text ? `「${context.raw.text.substring(0,20)}...」` : '';
+              const d = context.raw;
+              let label = context.dataset.label + ': ';
+              if (d.text) label += `「${d.text.substring(0, 30)}」`;
+              return label;
             }
           }
-        }
+        },
+        legend: { display: true, position: 'top' }
       }
     }
   });
@@ -631,20 +670,26 @@ function initChart() {
 
 function loadScatterData() {
   if (!currentSession) return;
-  
+
   runGoogleScript('getSessionLogs', currentSession.id)
     .then(logs => {
-      if(scatterChart) {
-        const plotData = logs.map(l => ({
-          x: l.value,
-          y: Math.random() * 10,
-          text: l.text
-        }));
-        scatterChart.data.datasets[0].data = plotData;
-        scatterChart.update();
-      }
+      if (!scatterChart) return;
+      const beforeData = [];
+      const afterData = [];
+      logs.forEach(l => {
+        const y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5;
+        const point = { x: Number(l.value) || 0, y: y, text: l.text };
+        if (l.phase === 'AFTER') {
+          afterData.push(point);
+        } else {
+          beforeData.push(point);
+        }
+      });
+      scatterChart.data.datasets[0].data = beforeData;
+      scatterChart.data.datasets[1].data = afterData;
+      scatterChart.update();
     })
-    .catch(console.error); // ポーリングエラーは静かに無視
+    .catch(console.error);
 }
 
 // ポーリング開始（教師: 散布図更新 / 生徒: フェーズ変更検知）
@@ -655,6 +700,128 @@ setInterval(() => {
     checkPhaseUpdate();
   }
 }, 5000);
+
+/**
+ * AI Socrates (Gemini Integration)
+ */
+function requestAiFeedback(sessionTitle, text, inputType, value) {
+  runGoogleScript('generateSocraticQuestion', sessionTitle, text, inputType, value)
+    .then(result => {
+      if (result && result.success && result.question) {
+        const card = document.getElementById('ai-feedback-card');
+        const textEl = document.getElementById('ai-feedback-text');
+        if (card && textEl) {
+          textEl.innerText = result.question;
+          card.classList.remove('d-none');
+        }
+      }
+    })
+    .catch(() => {}); // AIフィードバックは失敗しても無視
+}
+
+/**
+ * Gemini API Key Management (Teacher)
+ */
+function saveApiKey() {
+  const key = document.getElementById('gemini-api-key-input').value.trim();
+  runGoogleScript('saveGeminiApiKey', key)
+    .then(() => {
+      Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+      checkGeminiStatus();
+    })
+    .catch(showError);
+}
+
+function checkGeminiStatus() {
+  runGoogleScript('hasGeminiApiKey')
+    .then(result => {
+      const el = document.getElementById('gemini-status');
+      if (el) {
+        el.innerHTML = result && result.hasKey
+          ? '<span class="text-success"><i class="bi bi-check-circle"></i> APIキー設定済み（AI問いかけ機能ON）</span>'
+          : '<span class="text-muted"><i class="bi bi-x-circle"></i> 未設定（設定するとAI問いかけ機能が有効になります）</span>';
+      }
+    })
+    .catch(() => {});
+}
+
+/**
+ * Student Summaries (Teacher Report)
+ */
+function loadStudentSummaries() {
+  if (!currentSession) {
+    Swal.fire('授業が選択されていません', '', 'warning');
+    return;
+  }
+  const container = document.getElementById('summary-container');
+  container.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> 読み込み中...</div>';
+
+  runGoogleScript('getStudentSummaries', currentSession.id)
+    .then(summaries => {
+      if (!summaries || summaries.length === 0) {
+        container.innerHTML = '<p class="text-muted small">まだ回答がありません</p>';
+        return;
+      }
+      container.innerHTML = summaries.map(s => {
+        const before = s.before ? `<span class="badge bg-primary me-1">${s.before.value}</span>${s.before.text || ''}` : '<span class="text-muted">未回答</span>';
+        const after = s.after ? `<span class="badge bg-danger me-1">${s.after.value}</span>${s.after.text || ''}` : '<span class="text-muted">未回答</span>';
+        const changed = s.before && s.after && s.before.value !== s.after.value;
+        return `<div class="border rounded p-2 mb-2 ${changed ? 'border-warning' : ''}">
+          <div class="fw-bold">${s.name} <small class="text-muted">(${s.ruby})</small> ${changed ? '<span class="badge bg-warning text-dark">変化あり</span>' : ''}</div>
+          <div class="small mt-1"><span class="text-primary">導入:</span> ${before}</div>
+          <div class="small"><span class="text-danger">振り返り:</span> ${after}</div>
+        </div>`;
+      }).join('');
+    })
+    .catch(showError);
+}
+
+/**
+ * My Log (Student History)
+ */
+function showMyLog() {
+  if (!currentUser) return;
+  showView('view-mylog');
+
+  runGoogleScript('getAllSessions')
+    .then(sessions => {
+      if (!sessions || sessions.length === 0) {
+        document.getElementById('mylog-list').innerHTML = '<p class="text-muted">まだ記録がありません</p>';
+        return;
+      }
+      // 各セッションの自分のログを取得
+      const promises = sessions.map(session =>
+        runGoogleScript('getStudentLogs', session.id, currentUser.id)
+          .then(logs => ({ session, logs }))
+      );
+      Promise.all(promises).then(results => {
+        const html = results
+          .filter(r => r.logs.length > 0)
+          .map(r => {
+            const s = r.session;
+            const beforeLog = r.logs.find(l => l.phase === 'BEFORE');
+            const afterLog = r.logs.find(l => l.phase === 'AFTER');
+            const dateStr = s.date ? new Date(s.date).toLocaleDateString('ja-JP') : '';
+            let body = '';
+            if (beforeLog) {
+              body += `<div class="small"><span class="badge bg-primary">導入</span> ${beforeLog.value || ''} ${beforeLog.text ? '「' + beforeLog.text + '」' : ''}</div>`;
+            }
+            if (afterLog) {
+              body += `<div class="small mt-1"><span class="badge bg-danger">振り返り</span> ${afterLog.value || ''} ${afterLog.text ? '「' + afterLog.text + '」' : ''}</div>`;
+            }
+            return `<div class="card mb-2"><div class="card-body py-2">
+              <div class="fw-bold">${s.title} <small class="text-muted">${dateStr}</small></div>
+              ${body}
+            </div></div>`;
+          }).join('');
+        document.getElementById('mylog-list').innerHTML = html || '<p class="text-muted">まだ記録がありません</p>';
+      });
+    })
+    .catch(err => {
+      console.error(err);
+      document.getElementById('mylog-list').innerHTML = '<p class="text-muted">読み込みに失敗しました</p>';
+    });
+}
 
 /**
  * GAS Wrapper (GIGA Standard)
