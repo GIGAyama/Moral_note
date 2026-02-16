@@ -125,15 +125,10 @@
 
           <!-- Opinion Share & Other Actions -->
           <div class="text-center mt-4">
-            <button class="btn btn-outline-info btn-lg mb-3 w-100 py-3" id="btn-opinion-share"
-              onclick="toggleOpinionView()">
-              <i class="bi bi-people-fill me-2"></i> みんなの考え
+            <button class="btn btn-outline-info btn-lg mb-3 w-100 py-3 d-none" id="btn-opinion-share"
+              onclick="showOpinionFullscreen()">
+              <i class="bi bi-people-fill me-2"></i> みんなの<ruby>考<rt>かんが</rt></ruby>えを<ruby>見<rt>み</rt></ruby>る
             </button>
-            <!-- Opinion Share Container -->
-            <div id="opinion-share-container" class="d-none mb-3 bg-light p-3 rounded text-start">
-              <h6 class="text-muted mb-2 fw-bold">クラスのみんなの意見</h6>
-              <div id="opinion-list" style="max-height: 25vh; overflow-y: auto;"></div>
-            </div>
 
             <a href="#" class="text-muted d-block mt-2" style="font-size: 1.1rem;"
               onclick="logoutStudent(); return false;">
@@ -594,6 +589,20 @@
 
   </div>
 
+  <!-- Fullscreen Opinion Overlay (outside container) -->
+  <div id="fullscreen-opinions" class="d-none">
+    <div class="fs-header d-flex justify-content-between align-items-center">
+      <h5 class="mb-0 fw-bold text-primary">
+        <i class="bi bi-people-fill me-2"></i>みんなの<ruby>考<rt>かんが</rt></ruby>え
+      </h5>
+      <button class="btn btn-outline-secondary" onclick="closeOpinionFullscreen()">
+        <i class="bi bi-x-lg me-1"></i><ruby>閉<rt>と</rt></ruby>じる
+      </button>
+    </div>
+    <div id="fullscreen-opinion-content">
+      <!-- Pattern-specific fullscreen content rendered by JS -->
+    </div>
+  </div>
 
   <!-- Bulk Import Preview Modal -->
   <div class="modal fade" id="bulkImportModal" tabindex="-1" data-bs-backdrop="static">

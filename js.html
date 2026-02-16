@@ -143,39 +143,34 @@
   /**
    * Action: 送信
    */
-  // Opinion Sharing State
-  let isOpinionViewOpen = false;
+  /**
+   * Fullscreen Opinion View
+   */
+  function showOpinionFullscreen() {
+    const overlay = document.getElementById('fullscreen-opinions');
+    if (!overlay) return;
+    overlay.classList.remove('d-none');
 
-  function toggleOpinionView() {
-    const container = document.getElementById('opinion-share-container');
-    const btn = document.getElementById('btn-opinion-share');
+    const content = document.getElementById('fullscreen-opinion-content');
+    content.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div><p class="mt-3 text-muted fs-5">読み込み中...</p></div>';
 
-    if (!container) return; // container needs to be added to index.html
-
-    if (container.classList.contains('d-none')) {
-      // Open
-      container.classList.remove('d-none');
-      btn.innerHTML = '<i class="bi bi-x-circle"></i> 閉じる';
-      btn.classList.replace('btn-outline-info', 'btn-secondary');
-      loadClassOpinions();
-    } else {
-      // Close
-      container.classList.add('d-none');
-      btn.innerHTML = '<i class="bi bi-people"></i> みんなの考え';
-      btn.classList.replace('btn-secondary', 'btn-outline-info');
-    }
+    loadClassOpinionsFullscreen();
   }
 
-  function loadClassOpinions() {
-    const list = document.getElementById('opinion-list');
-    list.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-secondary"></div> 読み込み中...</div>';
+  function closeOpinionFullscreen() {
+    const overlay = document.getElementById('fullscreen-opinions');
+    if (overlay) overlay.classList.add('d-none');
+  }
 
+  function loadClassOpinionsFullscreen() {
     if (!currentSession) return;
+
+    const content = document.getElementById('fullscreen-opinion-content');
 
     runGoogleScript('getAnonymousOpinions', currentSession.id)
       .then(opinions => {
         if (!opinions || opinions.length === 0) {
-          list.innerHTML = '<p class="text-muted text-center py-2">まだ意見がありません</p>';
+          content.innerHTML = '<div class="text-center text-muted fs-4 py-5"><i class="bi bi-chat-dots d-block fs-1 mb-3"></i>まだ意見がありません</div>';
           return;
         }
 
@@ -183,7 +178,7 @@
         const filtered = opinions.filter(o => o.phase === currentPhase);
 
         if (filtered.length === 0) {
-          list.innerHTML = '<p class="text-muted text-center py-2">この場面の意見はまだありません</p>';
+          content.innerHTML = '<div class="text-center text-muted fs-4 py-5"><i class="bi bi-chat-dots d-block fs-1 mb-3"></i>この場面の意見はまだありません</div>';
           return;
         }
 
@@ -193,11 +188,11 @@
           opts = typeof currentSession.options === 'string' ? JSON.parse(currentSession.options) : (currentSession.options || {});
         } catch (e) { }
 
-        // PatternRendererのパターン別最適表示を使用
-        patternRenderer.renderOpinionList(currentSession.inputType, list, filtered, opts);
+        // フルスクリーン最適化表示
+        patternRenderer.renderOpinionListFullscreen(currentSession.inputType, content, filtered, opts);
       })
       .catch(err => {
-        list.innerHTML = '<p class="text-danger text-center">読み込み失敗</p>';
+        content.innerHTML = '<div class="text-center text-danger fs-5 py-5"><i class="bi bi-exclamation-triangle d-block fs-1 mb-3"></i>読み込みに失敗しました</div>';
       });
   }
 
@@ -229,7 +224,7 @@
         Swal.fire({
           icon: 'success',
           title: '送りました！',
-          text: '友達の意見を聞いてみよう',
+          text: '友達の意見も見てみよう',
           timer: 1500,
           showConfirmButton: false
         });
@@ -238,6 +233,10 @@
           const card = document.getElementById('color-match-card');
           if (card) card.classList.remove('d-none');
         }
+
+        // 送信後: みんなの考えボタンを表示
+        const btnOpinion = document.getElementById('btn-opinion-share');
+        if (btnOpinion) btnOpinion.classList.remove('d-none');
 
         // フォームリセット
         document.getElementById('input-text').value = '';
@@ -635,6 +634,9 @@
             if (pLabel) pLabel.innerText = phaseLabels[serverPhase] || serverPhase;
 
             updatePhaseButtons && updatePhaseButtons(serverPhase); // もし関数があれば
+
+            // フルスクリーン意見表示を閉じる
+            closeOpinionFullscreen();
 
             if (serverPhase === 'AFTER') {
               showReflectionView();
