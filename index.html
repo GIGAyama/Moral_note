@@ -183,27 +183,8 @@
               </ruby>え</h6>
           </div>
 
-          <!-- Input: Slider (Reflection) -->
-          <div id="reflection-input-slider" class="d-none mb-4">
-            <div class="d-flex justify-content-between mb-3">
-              <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;"
-                id="reflection-slider-label-min">A</span>
-              <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;"
-                id="reflection-slider-label-max">B</span>
-            </div>
-            <input type="range" class="form-range custom-range py-4" min="0" max="100" step="1" id="reflection-slider"
-              oninput="updateReflectionSliderDisplay(this.value)" style="height: 3rem;">
-            <div class="text-center mb-3">
-              <span id="reflection-slider-value" class="fw-bold display-4">50</span>
-            </div>
-          </div>
-
-          <!-- Input: Tags (Reflection) -->
-          <div id="reflection-input-tags" class="d-none mb-4 flex-grow-1">
-            <div id="reflection-tags-container" class="d-flex flex-wrap gap-3 justify-content-center">
-              <!-- JS Generated -->
-            </div>
-          </div>
+          <!-- PatternRenderer用コンテナ（全パターン対応） -->
+          <div id="reflection-pattern-renderer-host" class="mb-4"></div>
 
           <!-- Reason (Reflection) -->
           <div class="mb-4">
@@ -330,10 +311,11 @@
                     <select class="form-select" id="new-session-type" onchange="toggleSessionOptions()">
                       <option value="SLIDER">スライダー (葛藤場面)</option>
                       <option value="TAGS">感情タグ (心情把握)</option>
-                      <option value="QUADRANT">座標軸 (価値の配置) [NEW]</option>
-                      <option value="MANDALA">マンダラ (価値定義) [NEW]</option>
-                      <option value="ACTION">宣言カード (自分事) [NEW]</option>
-                      <!-- Future: RANKING, CURVE -->
+                      <option value="QUADRANT">座標軸 (価値の配置)</option>
+                      <option value="RANKING">ランキング (優先順位)</option>
+                      <option value="CURVE">心情曲線 (気持ちの変化)</option>
+                      <option value="MANDALA">マンダラ (価値定義)</option>
+                      <option value="ACTION">宣言カード (自分事)</option>
                     </select>
                   </div>
                   <div class="col-md-3 d-flex align-items-end">
@@ -379,6 +361,20 @@
                   </div>
                 </div>
 
+                <!-- Option: Ranking -->
+                <div id="session-opts-ranking" class="mt-2 d-none session-opts">
+                  <label class="small text-muted">並べ替える項目（カンマ区切り）</label>
+                  <input type="text" class="form-control form-control-sm" id="opt-ranking-items"
+                    placeholder="（例）正直,親切,勇気,思いやり" value="項目A,項目B,項目C,項目D">
+                </div>
+
+                <!-- Option: Curve -->
+                <div id="session-opts-curve" class="mt-2 d-none session-opts">
+                  <label class="small text-muted">場面（カンマ区切り）</label>
+                  <input type="text" class="form-control form-control-sm" id="opt-curve-scenes"
+                    placeholder="（例）はじめ,展開,山場,結末" value="はじめ,展開,山場,結末">
+                </div>
+
                 <!-- Option: Mandala -->
                 <div id="session-opts-mandala" class="mt-2 d-none session-opts">
                   <label class="small text-muted">中心テーマ</label>
@@ -416,23 +412,48 @@
                       <div class="card-body">
                         <input type="hidden" id="edit-unit-id">
                         <input type="text" class="form-control mb-2" id="edit-unit-title" placeholder="タイトル">
-                        <div class="row g-2 mb-2">
-                          <div class="col-4">
-                            <select class="form-select form-select-sm" id="edit-unit-type"
-                              onchange="toggleUnitEditOptions()">
-                              <option value="SLIDER">スライダー</option>
-                              <option value="TAGS">感情タグ</option>
-                            </select>
+                        <div class="mb-2">
+                          <select class="form-select form-select-sm mb-2" id="edit-unit-type"
+                            onchange="toggleUnitEditOptions()">
+                            <option value="SLIDER">スライダー</option>
+                            <option value="TAGS">感情タグ</option>
+                            <option value="QUADRANT">座標軸</option>
+                            <option value="RANKING">ランキング</option>
+                            <option value="CURVE">心情曲線</option>
+                            <option value="MANDALA">マンダラ</option>
+                            <option value="ACTION">宣言カード</option>
+                          </select>
+                          <div id="edit-unit-opts-slider" class="input-group input-group-sm">
+                            <input type="text" class="form-control" id="edit-unit-min" placeholder="左ラベル">
+                            <input type="text" class="form-control" id="edit-unit-max" placeholder="右ラベル">
                           </div>
-                          <div class="col-8">
-                            <div id="edit-unit-opts-slider" class="input-group input-group-sm">
-                              <input type="text" class="form-control" id="edit-unit-min" placeholder="左ラベル">
-                              <input type="text" class="form-control" id="edit-unit-max" placeholder="右ラベル">
+                          <div id="edit-unit-opts-tags" class="d-none">
+                            <input type="text" class="form-control form-control-sm" id="edit-unit-tags"
+                              placeholder="タグ (カンマ区切り)">
+                          </div>
+                          <div id="edit-unit-opts-quadrant" class="d-none">
+                            <div class="input-group input-group-sm mb-1">
+                              <span class="input-group-text">X軸</span>
+                              <input type="text" class="form-control" id="edit-unit-quad-xmin" placeholder="左">
+                              <input type="text" class="form-control" id="edit-unit-quad-xmax" placeholder="右">
                             </div>
-                            <div id="edit-unit-opts-tags" class="d-none">
-                              <input type="text" class="form-control form-control-sm" id="edit-unit-tags"
-                                placeholder="タグ (カンマ区切り)">
+                            <div class="input-group input-group-sm">
+                              <span class="input-group-text">Y軸</span>
+                              <input type="text" class="form-control" id="edit-unit-quad-ymin" placeholder="下">
+                              <input type="text" class="form-control" id="edit-unit-quad-ymax" placeholder="上">
                             </div>
+                          </div>
+                          <div id="edit-unit-opts-ranking" class="d-none">
+                            <input type="text" class="form-control form-control-sm" id="edit-unit-ranking-items"
+                              placeholder="項目 (カンマ区切り)">
+                          </div>
+                          <div id="edit-unit-opts-curve" class="d-none">
+                            <input type="text" class="form-control form-control-sm" id="edit-unit-curve-scenes"
+                              placeholder="場面 (カンマ区切り)">
+                          </div>
+                          <div id="edit-unit-opts-mandala" class="d-none">
+                            <input type="text" class="form-control form-control-sm" id="edit-unit-mandala-theme"
+                              placeholder="中心テーマ">
                           </div>
                         </div>
                         <textarea class="form-control form-control-sm mb-3" id="edit-unit-memo" rows="4"
@@ -537,9 +558,12 @@
                 <h5 class="mb-0 text-primary h6"><i class="bi bi-graph-up"></i> クラスの状態 (リアルタイム分布)</h5>
               </div>
               <div class="card-body p-4">
-                <div style="height: 400px;">
+                <!-- 散布図（SLIDER / QUADRANT） -->
+                <div id="chart-scatter-container" style="height: 400px;">
                   <canvas id="scatterChart"></canvas>
                 </div>
+                <!-- パターン別可視化コンテナ（TAGS/RANKING/CURVE/MANDALA/ACTION） -->
+                <div id="chart-pattern-container" class="d-none" style="max-height: 400px; overflow-y: auto;"></div>
               </div>
             </div>
           </div>
