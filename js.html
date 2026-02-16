@@ -109,40 +109,45 @@
     const titleEl = document.getElementById('session-title');
     if (titleEl) titleEl.innerText = session.title;
 
-    // UIリセット
-    document.getElementById('input-mode-slider').classList.add('d-none');
-    document.getElementById('input-mode-tags').classList.add('d-none');
+    // PatternRendererによる動的描画
+    const container = document.getElementById('pattern-ui-container');
+    if (!container) {
+      console.error('pattern-ui-container not found');
+      return;
+    }
 
-    // 入力モード切替
+    // オプションのパース
+    let opts = {};
+    try {
+      opts = typeof session.options === 'string' ? JSON.parse(session.options) : session.options;
+    } catch (e) {
+      console.error('Failed to parse options', e);
+    }
+
+    // Render
+    patternRenderer.render(session.inputType, container, opts, 'INPUT');
+
+    // 背景色調整等のためのコールバック的な処理が必要ならここで行う
+    // 例: Sliderの場合の背景色同期など (PatternRenderer内で完結させるのが理想だが、互換性維持のため)
     if (session.inputType === 'SLIDER') {
-      document.getElementById('input-mode-slider').classList.remove('d-none');
-      document.getElementById('slider-label-min').innerText = session.options.minLabel || 'A';
-      document.getElementById('slider-label-max').innerText = session.options.maxLabel || 'B';
-      // 初期カラー設定
-      updateSliderColor(document.getElementById('input-slider').value);
-    } else if (session.inputType === 'TAGS') {
-      document.getElementById('input-mode-tags').classList.remove('d-none');
-      const container = document.getElementById('tags-container');
-      container.innerHTML = '';
-      const tags = session.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-      tags.forEach(tag => {
-        const btn = document.createElement('div');
-        btn.className = 'emotion-tag';
-        btn.innerText = tag;
-        btn.onclick = () => selectTag(btn);
-        container.appendChild(btn);
-      });
+      const slider = document.getElementById('pattern-slider');
+      if (slider) {
+        // 初期カラー設定のロジック再利用 (IDが変わったので注意)
+        // patternRenderer.renderSlider で oninput に埋め込んでいるので、基本は不要だが
+        // 初期表示時の色設定が必要なら dispatchEvent する
+        slider.dispatchEvent(new Event('input'));
+      }
     }
   }
 
   function updateSliderColor(val) {
-    document.getElementById('slider-value-display').innerText = val;
-    const r = Math.floor(255 * (100 - val) / 100);
-    const b = Math.floor(255 * val / 100);
-    sliderColor = `rgb(${r}, 50, ${b})`;
-
-    const bg = document.getElementById('color-match-bg');
-    if (bg) bg.style.backgroundColor = `rgba(${r}, 50, ${b}, 0.2)`;
+    // 互換性維持: PatternRendererが独自に色管理しているため、ここは不要になる可能性があるが、
+    // まだ残っている古いコードから呼ばれるかもしれないので残す、または削除。
+    // 今回はPatternRenderer側で style 属性を直接いじっているので、この関数は実質不要だが、
+    // エラー防止のため残しておく。
+    const display = document.getElementById('slider-value-display');
+    if (display) display.innerText = val;
+    // ...
   }
 
   function selectTag(el) {
@@ -340,6 +345,10 @@
     const type = document.getElementById('new-session-type').value;
     document.getElementById('session-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
     document.getElementById('session-opts-tags').classList.toggle('d-none', type !== 'TAGS');
+    document.getElementById('session-opts-quadrant').classList.toggle('d-none', type !== 'QUADRANT');
+    document.getElementById('session-opts-mandala').classList.toggle('d-none', type !== 'MANDALA');
+    document.getElementById('session-opts-ranking').classList.toggle('d-none', type !== 'RANKING');
+    document.getElementById('session-opts-curve').classList.toggle('d-none', type !== 'CURVE');
   }
 
   /**
@@ -362,6 +371,23 @@
       const tagsStr = document.getElementById('opt-tags-list').value.trim();
       const tags = tagsStr ? tagsStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['共感', '疑問', '納得', '驚き'];
       options = { tags: tags };
+    } else if (type === 'QUADRANT') {
+      options = {
+        xAxisLabel: [
+          document.getElementById('opt-quad-xmin').value || '左',
+          document.getElementById('opt-quad-xmax').value || '右'
+        ],
+        yAxisLabel: [
+          document.getElementById('opt-quad-ymin').value || '下',
+          document.getElementById('opt-quad-ymax').value || '上'
+        ]
+      };
+    } else if (type === 'MANDALA') {
+      options = {
+        centerTheme: document.getElementById('opt-mandala-theme').value || 'テーマ'
+      };
+    } else if (type === 'ACTION') {
+      options = {}; // No config
     }
 
     Swal.fire({ title: '授業を作成中...', didOpen: () => Swal.showLoading() });
@@ -474,28 +500,37 @@
     if (!currentSession || !currentUser) return;
 
     // セッションの入力モードに応じたUI表示
-    const sliderDiv = document.getElementById('reflection-input-slider');
-    const tagsDiv = document.getElementById('reflection-input-tags');
-    sliderDiv.classList.add('d-none');
-    tagsDiv.classList.add('d-none');
+    // セッションの入力モードに応じたUI表示 (PatternRenderer)
+    const container = document.getElementById('reflection-pattern-container');
+    // 既存の静的コンテナを削除or非表示にして、PatternRenderer用コンテナを使う
+    // HTML構造上、reflection-input-slider等があるので、それらをwrapする親を作るか、
+    // ここで動的にクリアして使う。
+    // 今回は既存の `reflection-input-slider` などを無視し、新しいコンテナに描画する形に修正すべきだが、
+    // HTMLをいじるよりは、既存要素を隠して新しいコンテナを追加する方が安全。
 
-    if (currentSession.inputType === 'SLIDER') {
-      sliderDiv.classList.remove('d-none');
-      document.getElementById('reflection-slider-label-min').innerText = currentSession.options.minLabel || 'A';
-      document.getElementById('reflection-slider-label-max').innerText = currentSession.options.maxLabel || 'B';
-    } else if (currentSession.inputType === 'TAGS') {
-      tagsDiv.classList.remove('d-none');
-      const container = document.getElementById('reflection-tags-container');
-      container.innerHTML = '';
-      const tags = currentSession.options.tags || ['うれしい', 'かなしい', 'くやしい', '迷う'];
-      tags.forEach(tag => {
-        const btn = document.createElement('div');
-        btn.className = 'emotion-tag';
-        btn.innerText = tag;
-        btn.onclick = () => selectReflectionTag(btn);
-        container.appendChild(btn);
-      });
+    // 既存要素を隠す
+    document.getElementById('reflection-input-slider').classList.add('d-none');
+    document.getElementById('reflection-input-tags').classList.add('d-none');
+
+    // PatternRenderer用のコンテナがなければ作成
+    let pContainer = document.getElementById('reflection-pattern-renderer-host');
+    if (!pContainer) {
+      pContainer = document.createElement('div');
+      pContainer.id = 'reflection-pattern-renderer-host';
+      // 挿入場所: Reason (Line 226付近) の前、または既存inputの後
+      const refTextMode = document.getElementById('reflection-input-tags').parentNode;
+      // reflection-input-tags の親は card-body
+      document.getElementById('reflection-input-tags').after(pContainer);
     }
+    pContainer.innerHTML = '';
+
+    // オプションのパース
+    let opts = {};
+    try {
+      opts = typeof currentSession.options === 'string' ? JSON.parse(currentSession.options) : currentSession.options;
+    } catch (e) { }
+
+    patternRenderer.render(currentSession.inputType, pContainer, opts, 'REFLECTION');
 
     // BEFOREの回答を取得して表示
     runGoogleScript('getStudentLogs', currentSession.id, currentUser.id)
@@ -504,10 +539,33 @@
         const el = document.getElementById('reflection-before');
         if (beforeLog) {
           let display = '';
+          const val = beforeLog.value;
+
           if (currentSession.inputType === 'SLIDER') {
-            display = `<div class="mb-1">位置: <span class="badge bg-primary">${beforeLog.value}</span> / 100</div>`;
+            display = `<div class="mb-1">位置: <span class="badge bg-primary">${val}</span> / 100</div>`;
           } else if (currentSession.inputType === 'TAGS') {
-            display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${beforeLog.value}</span></div>`;
+            display = `<div class="mb-1">気持ち: <span class="badge bg-primary">${val}</span></div>`;
+          } else if (currentSession.inputType === 'QUADRANT') {
+            // JSONパース
+            let jsonVal = val;
+            try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
+            display = `<div class="mb-1">位置: <span class="badge bg-primary">X:${jsonVal.x}, Y:${jsonVal.y}</span></div>`;
+          } else if (currentSession.inputType === 'MANDALA') {
+            let jsonVal = val;
+            try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
+            // 簡易表示: 埋まった数など
+            const count = jsonVal.items ? jsonVal.items.filter(v => v).length : 0;
+            display = `<div class="mb-1">マンダラ: <span class="badge bg-primary">${count}個</span> の要素</div>`;
+            // 詳細表示は長くなるので、クリックで展開などのUIが本来は良いが、ここでは一部表示
+            if (count > 0) {
+              const preview = jsonVal.items.filter(v => v).slice(0, 3).join(', ');
+              display += `<div class="small text-muted text-truncate">${preview}...</div>`;
+            }
+          } else if (currentSession.inputType === 'ACTION') {
+            let jsonVal = val;
+            try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
+            display = `<div class="mb-1"><span class="badge bg-success">行動宣言</span></div>`;
+            display += `<div class="small bg-light p-1 rounded">いつ: ${jsonVal.when}<br>誰に: ${jsonVal.who}<br>何をする: ${jsonVal.what}</div>`;
           }
           if (beforeLog.text) {
             display += `<div class="mt-1">「${beforeLog.text}」</div>`;
@@ -541,23 +599,20 @@
     if (!currentUser || !currentSession) return;
 
     const text = document.getElementById('reflection-text').value;
-    let val = 0;
 
-    if (currentSession.inputType === 'SLIDER') {
-      val = Number(document.getElementById('reflection-slider').value);
-    } else if (currentSession.inputType === 'TAGS') {
-      if (!selectedReflectionTag) {
-        Swal.fire('気持ちを選んでね', '', 'warning');
-        return;
-      }
-      val = selectedReflectionTag;
+    // PatternRendererから値取得
+    const val = patternRenderer.getValue();
+
+    if (val === null || val === '') {
+      Swal.fire('入力を確認してね', '', 'warning');
+      return;
     }
 
     const payload = {
       sessionId: currentSession.id,
       studentId: currentUser.id,
       phase: 'AFTER',
-      value: val,
+      value: (typeof val === 'object') ? JSON.stringify(val) : val,
       text: text
     };
 
@@ -812,7 +867,7 @@
         maintainAspectRatio: false,
         scales: {
           x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
-          y: { min: 0, max: 10, display: false }
+          y: { min: 0, max: 10, display: false } // Default for SLIDER
         },
         plugins: {
           tooltip: {
@@ -837,17 +892,51 @@
     runGoogleScript('getSessionLogs', currentSession.id)
       .then(logs => {
         if (!scatterChart) return;
+
+        // チャートオプションの動的調整
+        const isQuad = currentSession.inputType === 'QUADRANT';
+        if (isQuad) {
+          scatterChart.options.scales.x.min = -100;
+          scatterChart.options.scales.x.max = 100;
+          scatterChart.options.scales.y.display = true;
+          scatterChart.options.scales.y.min = -100;
+          scatterChart.options.scales.y.max = 100;
+        } else {
+          // SLIDER Default
+          scatterChart.options.scales.x.min = 0;
+          scatterChart.options.scales.x.max = 100;
+          scatterChart.options.scales.y.display = false;
+          scatterChart.options.scales.y.min = 0;
+          scatterChart.options.scales.y.max = 10;
+        }
+
         const beforeData = [];
         const afterData = [];
+
         logs.forEach(l => {
-          const y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5;
-          const point = { x: Number(l.value) || 0, y: y, text: l.text };
+          let x, y;
+
+          if (isQuad) {
+            try {
+              const coord = JSON.parse(l.value);
+              x = Number(coord.x);
+              y = Number(coord.y);
+            } catch (e) { x = 0; y = 0; }
+          } else {
+            // SLIDER
+            x = Number(l.value) || 0;
+            y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5; // Jitter
+          }
+
+          const point = { x: x, y: y, text: l.text };
+
           if (l.phase === 'AFTER') {
             afterData.push(point);
           } else {
             beforeData.push(point);
           }
         });
+
         scatterChart.data.datasets[0].data = beforeData;
         scatterChart.data.datasets[1].data = afterData;
         scatterChart.update();

@@ -1,0 +1,557 @@
+<script>
+  /**
+   * Class: PatternRenderer
+   * 授業パターンごとのUI描画・操作を管理するクラス
+   */
+  class PatternRenderer {
+    constructor() {
+      this.container = null;
+      this.mode = 'INPUT'; // INPUT (入力) or REFLECTION (振り返り)
+      this.currentData = null; // 現在の入力データ
+    }
+
+    /**
+     * パターンに応じた入力UIを描画します
+     * @param {string} patternType - SLIDER, TAGS, QUADRANT, RANKING, CURVE
+     * @param {HTMLElement} container - 描画対象の親要素
+     * @param {Object} options - パターン設定オプション
+     * @param {string} mode - INPUT or REFLECTION
+     */
+    render(patternType, container, options, mode = 'INPUT') {
+      this.container = container;
+      this.mode = mode;
+      this.container.innerHTML = ''; // Clear
+
+      console.log(`Rendering Pattern: ${patternType} in ${mode} mode`, options);
+
+      switch (patternType) {
+        case 'SLIDER':
+          this.renderSlider(options);
+          break;
+        case 'TAGS':
+          this.renderTags(options);
+          break;
+        case 'QUADRANT':
+          this.renderQuadrant(options);
+          break;
+        case 'RANKING':
+          this.renderRanking(options);
+          break;
+        case 'CURVE':
+          this.renderCurve(options);
+          break;
+        case 'MANDALA':
+          this.renderMandala(options);
+          break;
+        case 'ACTION':
+          this.renderAction(options);
+          break;
+        default:
+          this.container.innerHTML = '<div class="alert alert-danger">不明なパターンです</div>';
+      }
+    }
+    /**
+     * みんなの意見リストを描画します
+     * @param {string} patternType 
+     * @param {HTMLElement} container 
+     * @param {Array} opinions - [{value, text, studentName}, ...]
+     */
+    renderOpinionList(patternType, container, opinions) {
+      container.innerHTML = '';
+      if (!opinions || opinions.length === 0) {
+        container.innerHTML = '<div class="text-muted text-center p-3">まだ意見がありません</div>';
+        return;
+      }
+
+      const list = document.createElement('div');
+      list.className = 'list-group list-group-flush';
+
+      opinions.forEach(op => {
+        const item = document.createElement('div');
+        item.className = 'list-group-item bg-transparent';
+
+        let content = '';
+        // パターンごとの表示ロジック
+        if (patternType === 'SLIDER') {
+          content = `<span class="badge bg-primary rounded-pill me-2">${op.value}</span> ${op.text || ''}`;
+        } else if (patternType === 'TAGS') {
+          content = `<span class="badge bg-info text-dark rounded-pill me-2">${op.value}</span> ${op.text || ''}`;
+        } else if (patternType === 'QUADRANT') {
+          let val = op.value;
+          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
+          content = `<span class="badge bg-secondary me-2">x:${val.x}, y:${val.y}</span> ${op.text || ''}`;
+        } else if (patternType === 'MANDALA') {
+          let val = op.value;
+          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
+          const items = val.items ? val.items.filter(v => v).slice(0, 3).join(', ') : '';
+          content = `<div><span class="badge bg-warning text-dark me-2">マンダラ</span>${items}...</div><div class="small text-muted">${op.text || ''}</div>`;
+        } else if (patternType === 'ACTION') {
+          let val = op.value;
+          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
+          content = `<div class="d-flex align-items-center"><span class="badge bg-success me-2">宣言</span> <span class="small fw-bold">${val.what || ''}</span></div>`;
+        } else if (patternType === 'RANKING') {
+          let val = op.value;
+          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
+          const top = (val.items && val.items.length > 0) ? val.items[0] : '-';
+          content = `<span class="badge bg-primary me-2">1位: ${top}</span> ${op.text || ''}`;
+        } else if (patternType === 'CURVE') {
+          content = `<span class="badge bg-secondary me-2">心情曲線</span> ${op.text || ''}`;
+        } else {
+          content = `${op.value} ${op.text || ''}`;
+        }
+
+        item.innerHTML = `
+                <div class="d-flex w-100 justify-content-between">
+                    <h6 class="mb-1 fw-bold text-truncate" style="max-width: 70%;">${content}</h6>
+                    <small class="text-muted text-end" style="min-width: 60px;">${op.studentName || '匿名'}</small>
+                </div>
+            `;
+        list.appendChild(item);
+      });
+
+      container.appendChild(list);
+    }
+
+    /**
+     * 現在の入力値を取得します
+     * @return {Object|null} - 送信データ形式 (value, text, coordinates, etc.)
+     */
+    getValue() {
+      // 各レンダーメソッドで設定した input 要素などから値を取得
+      // 汎用的な仕組みにするため、data-attribute等を利用するか、
+      // インスタンス変数を更新する形にする
+
+      // 仮の実装: 各renderメソッド内で .pattern-input クラスを持つ要素に値を入れる想定
+      // MANDALA/ACTIONの場合は、コンテナ内の複数のinputから値を集約する必要があるかもしれない
+
+      // MANDALA
+      if (this.container.querySelector('.mandala-grid')) {
+        const inputs = this.container.querySelectorAll('.mandala-input');
+        const center = this.container.querySelector('.mandala-center')?.innerText || '';
+        const values = Array.from(inputs).map(input => input.value);
+        return { center: center, items: values };
+      }
+
+      // ACTION
+      if (this.container.querySelector('.action-card')) {
+        const when = document.getElementById('action-when')?.value || '';
+        const who = document.getElementById('action-who')?.value || '';
+        const what = document.getElementById('action-what')?.value || '';
+        return { when: when, who: who, what: what };
+      }
+
+      // RANKING
+      if (this.container.querySelector('.ranking-list')) {
+        const items = Array.from(this.container.querySelectorAll('.ranking-item')).map(el => el.dataset.value);
+        return { items: items };
+      }
+
+      // CURVE
+      if (this.container.querySelector('.curve-container')) {
+        const inputs = this.container.querySelectorAll('.curve-input');
+        // labelsはdata-label属性とかから取るか、optionsから取る必要があるが、
+        // ここでは保存するのは { label: 'シーン名', value: 50 } の配列にする
+        const data = Array.from(inputs).map(input => {
+          return { label: input.dataset.label, value: Number(input.value) };
+        });
+        return { data: data };
+      }
+
+      const input = this.container.querySelector('.pattern-input');
+      if (!input) return null;
+
+      // JSON文字列として格納されている場合や、単純な値の場合
+      const val = input.value;
+      try {
+        return JSON.parse(val);
+      } catch (e) {
+        return val;
+      }
+    }
+
+    // =================================================================
+    // 1. SLIDER (既存互換)
+    // =================================================================
+    renderSlider(options) {
+      // 既存UIの再現 (ID等は既存のCSS/JSと整合性をとるため調整が必要だが、
+      // ここでは新規コンポーネントとして独立させる)
+
+      const minLabel = options.minLabel || 'A';
+      const maxLabel = options.maxLabel || 'B';
+      const initialVal = 50;
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      const html = `
+      <div class="mb-4">
+        <div class="d-flex justify-content-between mb-3">
+          <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;">${minLabel}</span>
+          <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;">${maxLabel}</span>
+        </div>
+        <input type="range" class="form-range custom-range py-4 pattern-input" min="0" max="100" step="1" 
+          value="${initialVal}" 
+          id="${prefix}pattern-slider"
+          oninput="document.getElementById('${prefix}slider-val').innerText = this.value; this.style.background = 'linear-gradient(90deg, #0d6efd ' + this.value + '%, #dee2e6 ' + this.value + '%)';"
+          style="height: 3rem;">
+        <div class="text-center mb-3">
+          <span id="${prefix}slider-val" class="fw-bold display-4">${initialVal}</span>
+        </div>
+      </div>
+    `;
+      this.container.innerHTML = html;
+    }
+
+    // =================================================================
+    // 2. TAGS (既存互換)
+    // =================================================================
+    renderTags(options) {
+      const tags = options.tags || ['共感', '疑問', '納得', '驚き'];
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      // 隠しフィールド
+      const hidden = document.createElement('input');
+      hidden.type = 'hidden';
+      hidden.className = 'pattern-input';
+      hidden.id = `${prefix}pattern-tags-val`;
+      this.container.appendChild(hidden);
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'd-flex flex-wrap gap-3 justify-content-center';
+
+      tags.forEach(tag => {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-outline-primary btn-lg rounded-pill px-4 py-2';
+        btn.innerText = tag;
+        btn.onclick = (e) => {
+          // Toggle logic
+          const allBtns = wrapper.querySelectorAll('.btn');
+          allBtns.forEach(b => {
+            b.classList.remove('btn-primary', 'text-white');
+            b.classList.add('btn-outline-primary');
+          });
+          e.target.classList.remove('btn-outline-primary');
+          e.target.classList.add('btn-primary', 'text-white');
+
+          hidden.value = tag;
+          // アニメーション
+          e.target.animate([
+            { transform: 'scale(1)' },
+            { transform: 'scale(1.1)' },
+            { transform: 'scale(1)' }
+          ], { duration: 200 });
+        };
+        wrapper.appendChild(btn);
+      });
+
+      this.container.appendChild(wrapper);
+    }
+
+    // =================================================================
+    // 3. QUADRANT (座標軸 - NEW)
+    // =================================================================
+    renderQuadrant(options) {
+      const xLabelMin = options.xAxisLabel?.[0] || '左';
+      const xLabelMax = options.xAxisLabel?.[1] || '右';
+      const yLabelMin = options.yAxisLabel?.[0] || '下';
+      const yLabelMax = options.yAxisLabel?.[1] || '上';
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      // スタイル定義
+      const html = `
+      <div class="position-relative mx-auto mb-4" style="width: 100%; max-width: 400px; aspect-ratio: 1/1;">
+        <!-- 背景グリッド -->
+        <div class="w-100 h-100 border bg-light position-relative" id="${prefix}quad-area" style="cursor: crosshair;">
+          <!-- 軸線 -->
+          <div class="position-absolute top-50 start-0 w-100 border-top border-secondary"></div>
+          <div class="position-absolute start-50 top-0 h-100 border-start border-secondary"></div>
+          
+          <!-- ラベル -->
+          <span class="position-absolute top-50 start-0 translate-middle-y ms-1 bg-white small px-1 border rounded">${xLabelMin}</span>
+          <span class="position-absolute top-50 end-0 translate-middle-y me-1 bg-white small px-1 border rounded">${xLabelMax}</span>
+          <span class="position-absolute bottom-0 start-50 translate-middle-x mb-1 bg-white small px-1 border rounded">${yLabelMin}</span>
+          <span class="position-absolute top-0 start-50 translate-middle-x mt-1 bg-white small px-1 border rounded">${yLabelMax}</span>
+
+          <!-- ピン (ドラッグ可能) -->
+          <div id="${prefix}quad-pin" class="position-absolute bg-primary rounded-circle shadow border border-white" 
+               style="width: 24px; height: 24px; top: 50%; left: 50%; transform: translate(-50%, -50%); cursor: grab; z-index: 10;">
+          </div>
+        </div>
+        <p class="text-center text-muted small mt-2">ピンを動かして位置を決めてね</p>
+        
+        <!-- 値保持用 -->
+        <input type="hidden" class="pattern-input" id="${prefix}quad-val" value='{"x":0, "y":0}'>
+      </div>
+    `;
+      this.container.innerHTML = html;
+
+      // イベントリスナー設定 (ドラッグ＆ドロップ)
+      this.setupQuadrantEvents(prefix);
+    }
+
+    setupQuadrantEvents(prefix) {
+      const area = document.getElementById(`${prefix}quad-area`);
+      const pin = document.getElementById(`${prefix}quad-pin`);
+      const input = document.getElementById(`${prefix}quad-val`);
+
+      let isDragging = false;
+
+      const updatePosition = (clientX, clientY) => {
+        const rect = area.getBoundingClientRect();
+        let x = clientX - rect.left;
+        let y = clientY - rect.top;
+
+        // 範囲制限
+        x = Math.max(0, Math.min(x, rect.width));
+        y = Math.max(0, Math.min(y, rect.height));
+
+        // 表示更新
+        pin.style.left = `${x}px`;
+        pin.style.top = `${y}px`;
+
+        // 正規化 (-100 to 100)
+        const normX = Math.round(((x / rect.width) * 200) - 100);
+        const normY = Math.round(-((y / rect.height) * 200) + 100); // Yは上がプラス
+
+        input.value = JSON.stringify({ x: normX, y: normY });
+      };
+
+      // Mouse Events
+      pin.addEventListener('mousedown', () => { isDragging = true; pin.style.cursor = 'grabbing'; });
+      window.addEventListener('mouseup', () => { isDragging = false; pin.style.cursor = 'grab'; });
+      window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        updatePosition(e.clientX, e.clientY);
+      });
+
+      // Click to move
+      area.addEventListener('click', (e) => {
+        updatePosition(e.clientX, e.clientY);
+      });
+
+      // Touch Events
+      pin.addEventListener('touchstart', (e) => { isDragging = true; e.preventDefault(); }, { passive: false });
+      window.addEventListener('touchend', () => { isDragging = false; });
+      window.addEventListener('touchmove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        updatePosition(touch.clientX, touch.clientY);
+      }, { passive: false });
+    }
+
+    // =================================================================
+    // 4. RANKING (ランキング - NEW)
+    // =================================================================
+    // =================================================================
+    // 4. RANKING (ランキング - NEW)
+    // =================================================================
+    renderRanking(options) {
+      const items = options.items || ['項目A', '項目B', '項目C'];
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      let html = `<div class="ranking-list mx-auto" style="max-width: 400px;">`;
+      html += `<p class="text-center text-muted small mb-2">上にあるほど「大事」です。<br>矢印ボタンで並べ替えてね。</p>`;
+
+      items.forEach((item, index) => {
+        html += `
+          <div class="card mb-2 ranking-item" data-value="${item}" id="${prefix}rank-item-${index}">
+            <div class="card-body p-2 d-flex align-items-center">
+               <div class="me-3 fw-bold fs-4 text-primary rank-num">${index + 1}</div>
+               <div class="flex-grow-1 fw-bold">${item}</div>
+               <div class="d-flex flex-column gap-1">
+                 <button class="btn btn-sm btn-outline-secondary" onclick="patternRenderer.moveRank(this, -1)">▲</button>
+                 <button class="btn btn-sm btn-outline-secondary" onclick="patternRenderer.moveRank(this, 1)">▼</button>
+               </div>
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+      this.container.innerHTML = html;
+      this.updateRankNumbers();
+    }
+
+    moveRank(btn, direction) {
+      const item = btn.closest('.ranking-item');
+      const list = item.parentNode;
+      const all = Array.from(list.children).filter(c => c.classList.contains('ranking-item'));
+      const index = all.indexOf(item);
+
+      if (direction === -1 && index > 0) {
+        list.insertBefore(item, all[index - 1]);
+      } else if (direction === 1 && index < all.length - 1) {
+        list.insertBefore(item, all[index + 1].nextSibling);
+      }
+      this.updateRankNumbers();
+    }
+
+    updateRankNumbers() {
+      if (!this.container) return;
+      const items = this.container.querySelectorAll('.ranking-item');
+      items.forEach((item, idx) => {
+        item.querySelector('.rank-num').innerText = idx + 1;
+        // 1位は色を変えるなど
+        if (idx === 0) item.classList.add('border-primary');
+        else item.classList.remove('border-primary');
+      });
+    }
+
+    // =================================================================
+    // 5. CURVE (心情曲線 - Timeline)
+    // =================================================================
+    renderCurve(options) {
+      const scenes = options.scenes || ['はじめ', '展開', '山場', '結末'];
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      // Chart用Canvas + Slider群
+      const html = `
+        <div class="curve-container mx-auto" style="max-width: 500px;">
+           <!-- プレビューチャート -->
+           <div style="height: 150px; width: 100%; position: relative;">
+              <canvas id="${prefix}curve-chart"></canvas>
+           </div>
+           
+           <!-- スライダー群 -->
+           <div class="d-flex justify-content-between mt-3 gap-1 overflow-auto pb-3">
+              ${scenes.map((scene, idx) => `
+                 <div class="text-center" style="min-width: 60px; flex: 1;">
+                    <div class="d-flex justify-content-center" style="height: 150px;">
+                        <input type="range" class="form-range curve-input" 
+                               orient="vertical" 
+                               style="writing-mode: bt-lr; /* IE/Edge */ -webkit-appearance: slider-vertical; width: 8px;"
+                               min="0" max="100" value="50" 
+                               data-index="${idx}" 
+                               data-label="${scene}"
+                               oninput="patternRenderer.updateCurveChart('${prefix}')">
+                    </div>
+                    <small class="d-block mt-2 fw-bold text-truncate" title="${scene}">${scene}</small>
+                 </div>
+              `).join('')}
+           </div>
+        </div>
+      `;
+
+      this.container.innerHTML = html;
+
+      // 初回チャート描画
+      setTimeout(() => this.initCurveChart(prefix, scenes), 100);
+    }
+
+    initCurveChart(prefix, scenes) {
+      const ctx = document.getElementById(`${prefix}curve-chart`);
+      if (!ctx) return;
+
+      // 既存チャート破棄のための管理が必要だが、
+      // 簡易的に data-chart-id 等で管理するか、毎回新規作成（CanvasごとHTML再生成しているのでOK）
+
+      const initialData = new Array(scenes.length).fill(50);
+
+      this.currentChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: scenes,
+          datasets: [{
+            label: '気持ち',
+            data: initialData,
+            borderColor: 'rgb(75, 192, 192)',
+            tension: 0.3,
+            fill: true,
+            backgroundColor: 'rgba(75, 192, 192, 0.2)'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { min: 0, max: 100, display: false },
+            x: { display: false } // ラベルはスライダーの下にあるので非表示でもOKだが、あったほうがわかりやすいかも
+          },
+          plugins: { legend: { display: false } },
+          animation: false // レスポンス優先
+        }
+      });
+    }
+
+    updateCurveChart(prefix) {
+      if (!this.currentChart) return;
+
+      const inputs = this.container.querySelectorAll('.curve-input');
+      const data = Array.from(inputs).map(input => Number(input.value));
+
+      this.currentChart.data.datasets[0].data = data;
+      this.currentChart.update();
+    }
+
+    // =================================================================
+    // 6. MANDALA (マンダラチャート - Type C)
+    // =================================================================
+    renderMandala(options) {
+      const theme = options.centerTheme || 'テーマ';
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      // 3x3 Grid
+      // Center is fixed text (theme)
+      // Surrounding 8 are inputs
+
+      let html = `
+      <div class="mandala-grid mx-auto mb-4" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; max-width: 400px; aspect-ratio: 1/1;">
+    `;
+
+      // 0-8 indices. Center is 4.
+      for (let i = 0; i < 9; i++) {
+        if (i === 4) {
+          // Center
+          html += `
+              <div class="d-flex align-items-center justify-content-center bg-primary text-white fw-bold rounded shadow-sm p-1 text-center mandala-center" style="aspect-ratio: 1/1; font-size: 1.1rem; overflow: hidden;">
+                ${theme}
+              </div>
+            `;
+        } else {
+          // Surrounding Inputs
+          html += `
+              <textarea class="form-control text-center p-1 mandala-input" style="aspect-ratio: 1/1; resize: none; font-size: 0.9rem;" placeholder="要素"></textarea>
+            `;
+        }
+      }
+
+      html += `</div>
+      <p class="text-center text-muted small mt-2">テーマを構成するものを書き出そう</p>
+    `;
+
+      this.container.innerHTML = html;
+    }
+
+    // =================================================================
+    // 7. ACTION (宣言カード - Type D)
+    // =================================================================
+    renderAction(options) {
+      const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
+
+      const html = `
+        <div class="action-card card border-success mb-4 border-2">
+           <div class="card-header bg-white text-success fw-bold text-center">
+             <i class="bi bi-megaphone-fill"></i> 私の行動宣言
+           </div>
+           <div class="card-body bg-light">
+             <div class="mb-3">
+               <label class="form-label small text-muted"><i class="bi bi-clock"></i> いつ（場面）</label>
+               <input type="text" class="form-control" id="action-when" placeholder="明日、学校で...">
+             </div>
+             <div class="mb-3">
+               <label class="form-label small text-muted"><i class="bi bi-person"></i> 誰に（対象）</label>
+               <input type="text" class="form-control" id="action-who" placeholder="友達に、家族に...">
+             </div>
+             <div class="mb-3">
+               <label class="form-label small text-muted"><i class="bi bi-check-circle"></i> 何をする（行動）</label>
+               <textarea class="form-control" id="action-what" rows="2" placeholder="挨拶をする、手伝う..."></textarea>
+             </div>
+           </div>
+        </div>
+      `;
+      this.container.innerHTML = html;
+    }
+  }
+
+  // グローバルインスタンス
+  const patternRenderer = new PatternRenderer();
+</script>

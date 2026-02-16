@@ -103,31 +103,14 @@
           <!-- Phase Label -->
           <div class="alert alert-info py-3 mb-3 text-center">
             <i class="bi bi-info-circle fs-4"></i>
-            <span id="phase-label" class="fs-4 fw-bold ms-2"><ruby>今<rt>いま</rt></ruby>の<ruby>考<rt>かんが</rt>
+            <span id="phase-label" class="fs-4 fw-bold ms-2"><ruby>今<rt>いま</rt>
+              </ruby>の<ruby>考<rt>かんが</rt>
               </ruby>えを<ruby>教<rt>おし</rt></ruby>えてね</span>
           </div>
 
-          <!-- Input: Slider Mode -->
-          <div id="input-mode-slider" class="d-none mb-4">
-            <div class="d-flex justify-content-between mb-3">
-              <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;" id="slider-label-min">A</span>
-              <span class="badge bg-secondary text-wrap fs-5 p-3" style="width: 45%;" id="slider-label-max">B</span>
-            </div>
-            <input type="range" class="form-range custom-range py-4" min="0" max="100" step="1" id="input-slider"
-              oninput="updateSliderColor(this.value)" style="height: 3rem;">
-            <div class="text-center mb-3">
-              <span id="slider-value-display" class="fw-bold display-4">50</span>
-            </div>
-          </div>
+          <!-- Pattern UI Container -->
+          <div id="pattern-ui-container" class="mb-4"></div>
 
-          <!-- Input: Tags Mode -->
-          <div id="input-mode-tags" class="d-none mb-4 flex-grow-1">
-            <p class="text-muted fs-5 mb-3"><ruby>気持<rt>きも</rt></ruby>ちに<ruby>近<rt>ちか</rt></ruby>いものを<ruby>選<rt>えら</rt>
-              </ruby>ぼう</p>
-            <div id="tags-container" class="d-flex flex-wrap gap-3 justify-content-center">
-              <!-- JS Generated -->
-            </div>
-          </div>
 
           <!-- Reason Input -->
           <div class="mb-4">
@@ -347,7 +330,10 @@
                     <select class="form-select" id="new-session-type" onchange="toggleSessionOptions()">
                       <option value="SLIDER">スライダー (葛藤場面)</option>
                       <option value="TAGS">感情タグ (心情把握)</option>
-                      <option value="TEXT">自由記述 (定義・まとめ)</option>
+                      <option value="QUADRANT">座標軸 (価値の配置) [NEW]</option>
+                      <option value="MANDALA">マンダラ (価値定義) [NEW]</option>
+                      <option value="ACTION">宣言カード (自分事) [NEW]</option>
+                      <!-- Future: RANKING, CURVE -->
                     </select>
                   </div>
                   <div class="col-md-3 d-flex align-items-end">
@@ -358,7 +344,7 @@
                 </div>
 
                 <!-- Options -->
-                <div id="session-opts-slider" class="row g-3 mt-1">
+                <div id="session-opts-slider" class="row g-3 mt-1 session-opts">
                   <div class="col-6">
                     <input type="text" class="form-control form-control-sm" id="opt-slider-min"
                       placeholder="左端ラベル (例: 賛成)" value="賛成">
@@ -368,9 +354,36 @@
                       placeholder="右端ラベル (例: 反対)" value="反対">
                   </div>
                 </div>
-                <div id="session-opts-tags" class="mt-2 d-none">
+                <div id="session-opts-tags" class="mt-2 d-none session-opts">
                   <input type="text" class="form-control form-control-sm" id="opt-tags-list" placeholder="タグ (カンマ区切り)"
                     value="共感,疑問,納得,驚き">
+                </div>
+
+                <!-- Option: Quadrant -->
+                <div id="session-opts-quadrant" class="mt-2 d-none session-opts">
+                  <div class="row g-2">
+                    <div class="col-6">
+                      <label class="small text-muted">X軸 (左右)</label>
+                      <div class="input-group input-group-sm">
+                        <input type="text" class="form-control" id="opt-quad-xmin" placeholder="左" value="左">
+                        <input type="text" class="form-control" id="opt-quad-xmax" placeholder="右" value="右">
+                      </div>
+                    </div>
+                    <div class="col-6">
+                      <label class="small text-muted">Y軸 (上下)</label>
+                      <div class="input-group input-group-sm">
+                        <input type="text" class="form-control" id="opt-quad-ymin" placeholder="下" value="下">
+                        <input type="text" class="form-control" id="opt-quad-ymax" placeholder="上" value="上">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Option: Mandala -->
+                <div id="session-opts-mandala" class="mt-2 d-none session-opts">
+                  <label class="small text-muted">中心テーマ</label>
+                  <input type="text" class="form-control form-control-sm" id="opt-mandala-theme" placeholder="（例）友情、親切"
+                    value="考えるテーマ">
                 </div>
               </div>
 
@@ -596,6 +609,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 
+  <?!= include('js_patterns'); ?>
   <?!= include('js'); ?>
 </body>
 
