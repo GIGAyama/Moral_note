@@ -9,13 +9,15 @@
     font-family: "Zen Maru Gothic", sans-serif;
     background-color: #f8f9fa;
     color: #333;
-    padding-bottom: 60px; /* Footer space */
+    padding-bottom: 60px;
+    /* Footer space */
   }
 
   /* ルビの調整 */
   ruby {
     ruby-position: over;
   }
+
   rt {
     font-size: 0.6em;
     color: #6c757d;
@@ -32,12 +34,13 @@
   .custom-range {
     height: 1.5rem;
   }
+
   input[type=range]::-webkit-slider-thumb {
     background: #1a73e8;
     cursor: pointer;
     width: 24px;
     height: 24px;
-    margin-top: -8px; 
+    margin-top: -8px;
   }
 
   /* 感情タグボタン */
@@ -49,6 +52,7 @@
     cursor: pointer;
     transition: all 0.2s;
   }
+
   .emotion-tag.active {
     background-color: #e8f0fe;
     border-color: #1a73e8;
@@ -60,8 +64,74 @@
   .fade-in {
     animation: fadeIn 0.5s ease-in;
   }
+
   @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* 
+   * Student UI Optimization (Larger & Compact) 
+   */
+  .student-view-container {
+    min-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  /* Larger Text for Kids */
+  #view-entry,
+  #view-reflection,
+  #view-done,
+  #view-waiting,
+  #view-login {
+    font-size: 1.2rem;
+  }
+
+  #view-entry h5,
+  #view-reflection h5 {
+    font-size: 1.5rem;
+  }
+
+  .form-label {
+    font-weight: bold;
+    font-size: 1.3rem;
+  }
+
+  textarea.form-control {
+    font-size: 1.3rem;
+  }
+
+  /* Larger Buttons */
+  .btn-lg {
+    padding: 1rem 2rem;
+    font-size: 1.4rem;
+  }
+
+  /* Slider Touch Target */
+  input[type=range]::-webkit-slider-thumb {
+    width: 32px;
+    height: 32px;
+    margin-top: -12px;
+  }
+
+  /* Emotion Tags */
+  .emotion-tag {
+    font-size: 1.3rem;
+    padding: 12px 24px;
+    margin: 4px;
+  }
+
+  /* Ruby text slightly larger */
+  rt {
+    font-size: 0.7em;
   }
 </style>
