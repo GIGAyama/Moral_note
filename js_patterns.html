@@ -56,60 +56,401 @@
      * @param {HTMLElement} container 
      * @param {Array} opinions - [{value, text, studentName}, ...]
      */
-    renderOpinionList(patternType, container, opinions) {
+    /**
+     * JSON文字列を安全にパースするヘルパー
+     */
+    _parseValue(val) {
+      if (typeof val === 'object' && val !== null) return val;
+      if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch (e) { return val; }
+      }
+      return val;
+    }
+
+    /**
+     * みんなの意見リストを描画（パターン別に最適化された表示）
+     */
+    renderOpinionList(patternType, container, opinions, options) {
       container.innerHTML = '';
       if (!opinions || opinions.length === 0) {
         container.innerHTML = '<div class="text-muted text-center p-3">まだ意見がありません</div>';
         return;
       }
 
-      const list = document.createElement('div');
-      list.className = 'list-group list-group-flush';
+      // パターン別に最適な表示方式を選択
+      switch (patternType) {
+        case 'SLIDER':
+          this._renderSliderOpinions(container, opinions, options);
+          break;
+        case 'TAGS':
+          this._renderTagsOpinions(container, opinions, options);
+          break;
+        case 'QUADRANT':
+          this._renderQuadrantOpinions(container, opinions, options);
+          break;
+        case 'RANKING':
+          this._renderRankingOpinions(container, opinions, options);
+          break;
+        case 'CURVE':
+          this._renderCurveOpinions(container, opinions, options);
+          break;
+        case 'MANDALA':
+          this._renderMandalaOpinions(container, opinions, options);
+          break;
+        case 'ACTION':
+          this._renderActionOpinions(container, opinions, options);
+          break;
+        default:
+          this._renderDefaultOpinions(container, opinions);
+      }
+    }
 
-      opinions.forEach(op => {
-        const item = document.createElement('div');
-        item.className = 'list-group-item bg-transparent';
+    /**
+     * SLIDER: 分布バー + 意見一覧
+     */
+    _renderSliderOpinions(container, opinions, options) {
+      const opts = options || {};
+      const minLabel = opts.minLabel || 'A';
+      const maxLabel = opts.maxLabel || 'B';
 
-        let content = '';
-        // パターンごとの表示ロジック
-        if (patternType === 'SLIDER') {
-          content = `<span class="badge bg-primary rounded-pill me-2">${op.value}</span> ${op.text || ''}`;
-        } else if (patternType === 'TAGS') {
-          content = `<span class="badge bg-info text-dark rounded-pill me-2">${op.value}</span> ${op.text || ''}`;
-        } else if (patternType === 'QUADRANT') {
-          let val = op.value;
-          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
-          content = `<span class="badge bg-secondary me-2">x:${val.x}, y:${val.y}</span> ${op.text || ''}`;
-        } else if (patternType === 'MANDALA') {
-          let val = op.value;
-          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
-          const items = val.items ? val.items.filter(v => v).slice(0, 3).join(', ') : '';
-          content = `<div><span class="badge bg-warning text-dark me-2">マンダラ</span>${items}...</div><div class="small text-muted">${op.text || ''}</div>`;
-        } else if (patternType === 'ACTION') {
-          let val = op.value;
-          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
-          content = `<div class="d-flex align-items-center"><span class="badge bg-success me-2">宣言</span> <span class="small fw-bold">${val.what || ''}</span></div>`;
-        } else if (patternType === 'RANKING') {
-          let val = op.value;
-          if (typeof val === 'string') try { val = JSON.parse(val); } catch (e) { }
-          const top = (val.items && val.items.length > 0) ? val.items[0] : '-';
-          content = `<span class="badge bg-primary me-2">1位: ${top}</span> ${op.text || ''}`;
-        } else if (patternType === 'CURVE') {
-          content = `<span class="badge bg-secondary me-2">心情曲線</span> ${op.text || ''}`;
-        } else {
-          content = `${op.value} ${op.text || ''}`;
-        }
+      // 分布バーを表示
+      const values = opinions.map(o => Number(o.value) || 50);
+      const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
 
-        item.innerHTML = `
-                <div class="d-flex w-100 justify-content-between">
-                    <h6 class="mb-1 fw-bold text-truncate" style="max-width: 70%;">${content}</h6>
-                    <small class="text-muted text-end" style="min-width: 60px;">${op.studentName || '匿名'}</small>
-                </div>
-            `;
-        list.appendChild(item);
+      let html = `<div class="mb-3 p-2 bg-white rounded border">
+        <div class="d-flex justify-content-between small text-muted mb-1">
+          <span>${minLabel}</span>
+          <span class="fw-bold">${opinions.length}人の平均: ${avg}</span>
+          <span>${maxLabel}</span>
+        </div>
+        <div class="position-relative bg-light rounded" style="height: 24px;">`;
+
+      // 各回答をドットで表示
+      values.forEach(v => {
+        html += `<div class="position-absolute bg-primary rounded-circle" style="width: 8px; height: 8px; left: ${v}%; top: 50%; transform: translate(-50%, -50%); opacity: 0.6;"></div>`;
       });
 
-      container.appendChild(list);
+      // 平均マーカー
+      html += `<div class="position-absolute bg-danger" style="width: 3px; height: 100%; left: ${avg}%; top: 0;"></div>`;
+      html += `</div></div>`;
+
+      // テキスト意見一覧
+      html += this._buildTextList(opinions, (op) => {
+        return `<span class="badge bg-primary rounded-pill me-2">${op.value}</span>`;
+      });
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * TAGS: カテゴリ別にグループ化して表示
+     */
+    _renderTagsOpinions(container, opinions, options) {
+      // タグごとにグループ化
+      const groups = {};
+      opinions.forEach(op => {
+        const tag = op.value || '不明';
+        if (!groups[tag]) groups[tag] = [];
+        groups[tag].push(op);
+      });
+
+      const colors = ['bg-primary', 'bg-success', 'bg-warning text-dark', 'bg-info text-dark', 'bg-danger', 'bg-secondary'];
+
+      let html = `<div class="mb-3">`;
+      // サマリーバッジ
+      html += `<div class="d-flex flex-wrap gap-2 mb-3 justify-content-center">`;
+      Object.keys(groups).forEach((tag, idx) => {
+        const color = colors[idx % colors.length];
+        html += `<span class="badge ${color} fs-6 px-3 py-2">${tag} <span class="badge bg-light text-dark ms-1">${groups[tag].length}</span></span>`;
+      });
+      html += `</div>`;
+
+      // グループ別意見
+      Object.keys(groups).forEach((tag, idx) => {
+        const color = colors[idx % colors.length];
+        groups[tag].forEach(op => {
+          if (op.text) {
+            html += `<div class="card mb-2 border-start border-3" style="border-color: var(--bs-${color.replace('bg-', '').replace(' text-dark', '')}) !important;">
+              <div class="card-body py-2 px-3">
+                <span class="badge ${color} me-2">${tag}</span>
+                <span>${op.text}</span>
+              </div>
+            </div>`;
+          }
+        });
+      });
+      html += `</div>`;
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * QUADRANT: ミニ散布図 + テキスト一覧
+     */
+    _renderQuadrantOpinions(container, opinions, options) {
+      const opts = options || {};
+      const xMin = opts.xAxisLabel?.[0] || '左';
+      const xMax = opts.xAxisLabel?.[1] || '右';
+      const yMin = opts.yAxisLabel?.[0] || '下';
+      const yMax = opts.yAxisLabel?.[1] || '上';
+
+      // ミニ散布図
+      let html = `<div class="mb-3 p-2 bg-white rounded border">
+        <div class="position-relative mx-auto" style="width: 100%; max-width: 250px; aspect-ratio: 1/1;">
+          <div class="w-100 h-100 bg-light border position-relative">
+            <div class="position-absolute top-50 start-0 w-100 border-top border-secondary" style="opacity: 0.3;"></div>
+            <div class="position-absolute start-50 top-0 h-100 border-start border-secondary" style="opacity: 0.3;"></div>
+            <span class="position-absolute top-50 start-0 translate-middle-y small text-muted" style="font-size: 0.7rem; margin-left: 2px;">${xMin}</span>
+            <span class="position-absolute top-50 end-0 translate-middle-y small text-muted" style="font-size: 0.7rem; margin-right: 2px;">${xMax}</span>
+            <span class="position-absolute top-0 start-50 translate-middle-x small text-muted" style="font-size: 0.7rem; margin-top: 2px;">${yMax}</span>
+            <span class="position-absolute bottom-0 start-50 translate-middle-x small text-muted" style="font-size: 0.7rem; margin-bottom: 2px;">${yMin}</span>`;
+
+      // 各回答をドットで表示
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && typeof val === 'object') {
+          const left = ((Number(val.x) + 100) / 200) * 100;
+          const top = ((100 - Number(val.y)) / 200) * 100;
+          html += `<div class="position-absolute bg-primary rounded-circle border border-white" style="width: 12px; height: 12px; left: ${left}%; top: ${top}%; transform: translate(-50%, -50%); opacity: 0.7;"></div>`;
+        }
+      });
+
+      html += `</div></div></div>`;
+
+      // テキスト意見
+      html += this._buildTextList(opinions, (op) => {
+        const val = this._parseValue(op.value);
+        return val && typeof val === 'object'
+          ? `<span class="badge bg-secondary me-2">x:${val.x} y:${val.y}</span>`
+          : '';
+      });
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * RANKING: 集計ランキング表示
+     */
+    _renderRankingOpinions(container, opinions, options) {
+      // 各回答のランキングを集計（1位に配点3, 2位に2, 3位に1...）
+      const scores = {};
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && val.items) {
+          val.items.forEach((item, idx) => {
+            if (!scores[item]) scores[item] = 0;
+            scores[item] += Math.max(val.items.length - idx, 1);
+          });
+        }
+      });
+
+      const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+
+      let html = `<div class="mb-3">
+        <div class="text-center small text-muted mb-2">みんなのランキング集計（${opinions.length}人）</div>`;
+
+      if (sorted.length > 0) {
+        const maxScore = sorted[0][1];
+        sorted.forEach(([item, score], idx) => {
+          const pct = Math.round((score / maxScore) * 100);
+          const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}.`;
+          html += `<div class="d-flex align-items-center mb-1">
+            <span class="me-2" style="min-width: 28px; text-align: center;">${medal}</span>
+            <div class="flex-grow-1">
+              <div class="d-flex justify-content-between small">
+                <span class="fw-bold">${item}</span>
+                <span class="text-muted">${score}pt</span>
+              </div>
+              <div class="progress" style="height: 6px;">
+                <div class="progress-bar" style="width: ${pct}%"></div>
+              </div>
+            </div>
+          </div>`;
+        });
+      }
+
+      html += `</div>`;
+
+      // テキスト意見
+      html += this._buildTextList(opinions, (op) => {
+        const val = this._parseValue(op.value);
+        const top = val?.items?.[0] || '-';
+        return `<span class="badge bg-primary me-2">1位: ${top}</span>`;
+      });
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * CURVE: 重ね合わせ折れ線チャート
+     */
+    _renderCurveOpinions(container, opinions, options) {
+      const opts = options || {};
+      const scenes = opts.scenes || ['はじめ', '展開', '山場', '結末'];
+
+      // チャート用Canvas
+      const canvasId = 'opinion-curve-chart-' + Date.now();
+      let html = `<div class="mb-3 p-2 bg-white rounded border">
+        <div class="text-center small text-muted mb-1">みんなの心情曲線（${opinions.length}人）</div>
+        <div style="height: 150px;"><canvas id="${canvasId}"></canvas></div>
+      </div>`;
+
+      // テキスト意見
+      html += this._buildTextList(opinions, () => {
+        return `<span class="badge bg-secondary me-2">心情曲線</span>`;
+      });
+
+      container.innerHTML = html;
+
+      // チャート描画
+      setTimeout(() => {
+        const ctx = document.getElementById(canvasId);
+        if (!ctx) return;
+
+        const datasets = [];
+        // 平均線データ
+        const avgData = new Array(scenes.length).fill(0);
+        let count = 0;
+
+        opinions.forEach((op, idx) => {
+          const val = this._parseValue(op.value);
+          if (val && val.data) {
+            const data = val.data.map(d => d.value);
+            // 平均に加算
+            data.forEach((v, i) => { avgData[i] += v; });
+            count++;
+            // 個別線（薄め）
+            datasets.push({
+              data: data,
+              borderColor: `hsla(${(idx * 37) % 360}, 70%, 60%, 0.3)`,
+              borderWidth: 1,
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false
+            });
+          }
+        });
+
+        // 平均線（太め）
+        if (count > 0) {
+          datasets.push({
+            label: 'みんなの平均',
+            data: avgData.map(v => Math.round(v / count)),
+            borderColor: 'rgb(255, 99, 132)',
+            borderWidth: 3,
+            pointRadius: 4,
+            tension: 0.3,
+            fill: false
+          });
+        }
+
+        new Chart(ctx, {
+          type: 'line',
+          data: { labels: scenes, datasets: datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: { min: 0, max: 100, display: false },
+              x: { ticks: { font: { size: 10 } } }
+            },
+            plugins: { legend: { display: false } },
+            animation: false
+          }
+        });
+      }, 100);
+    }
+
+    /**
+     * MANDALA: キーワードクラウド風表示
+     */
+    _renderMandalaOpinions(container, opinions, options) {
+      // 全回答のキーワードを集約
+      const wordCounts = {};
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && val.items) {
+          val.items.filter(v => v && v.trim()).forEach(item => {
+            const word = item.trim();
+            wordCounts[word] = (wordCounts[word] || 0) + 1;
+          });
+        }
+      });
+
+      const sorted = Object.entries(wordCounts).sort((a, b) => b[1] - a[1]);
+
+      let html = `<div class="mb-3">
+        <div class="text-center small text-muted mb-2">みんなが書いたキーワード（${opinions.length}人）</div>
+        <div class="d-flex flex-wrap gap-1 justify-content-center mb-3">`;
+
+      sorted.slice(0, 20).forEach(([word, count]) => {
+        const size = count >= 3 ? 'fs-5 px-3 py-1' : count >= 2 ? 'px-2 py-1' : 'small px-2';
+        html += `<span class="badge bg-warning text-dark ${size}">${word}<sup class="ms-1">${count}</sup></span>`;
+      });
+
+      html += `</div></div>`;
+
+      // テキスト意見
+      html += this._buildTextList(opinions, (op) => {
+        const val = this._parseValue(op.value);
+        const preview = val?.items?.filter(v => v).slice(0, 2).join(', ') || '';
+        return preview ? `<span class="badge bg-warning text-dark me-2">${preview}...</span>` : '';
+      });
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * ACTION: 宣言カード一覧
+     */
+    _renderActionOpinions(container, opinions, options) {
+      let html = `<div class="text-center small text-muted mb-2">みんなの行動宣言（${opinions.length}人）</div>`;
+
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && typeof val === 'object') {
+          html += `<div class="card mb-2 border-start border-3 border-success">
+            <div class="card-body py-2 px-3">
+              <div class="fw-bold text-success small"><i class="bi bi-megaphone-fill"></i> 行動宣言</div>
+              ${val.when ? `<div class="small"><span class="text-muted">いつ:</span> ${val.when}</div>` : ''}
+              ${val.who ? `<div class="small"><span class="text-muted">誰に:</span> ${val.who}</div>` : ''}
+              ${val.what ? `<div class="small fw-bold"><span class="text-muted">何を:</span> ${val.what}</div>` : ''}
+              ${op.text ? `<div class="small text-muted mt-1 border-top pt-1">${op.text}</div>` : ''}
+            </div>
+          </div>`;
+        }
+      });
+
+      container.innerHTML = html;
+    }
+
+    /**
+     * デフォルト表示
+     */
+    _renderDefaultOpinions(container, opinions) {
+      container.innerHTML = this._buildTextList(opinions, (op) => {
+        return `<span class="badge bg-secondary me-2">${op.value}</span>`;
+      });
+    }
+
+    /**
+     * テキスト意見一覧の共通ビルダー
+     */
+    _buildTextList(opinions, badgeBuilder) {
+      const withText = opinions.filter(op => op.text && op.text.trim());
+      if (withText.length === 0) return '';
+
+      let html = '';
+      withText.forEach(op => {
+        const badge = badgeBuilder(op);
+        html += `<div class="card mb-2" style="border-left: 4px solid #17a2b8;">
+          <div class="card-body py-2 px-3">
+            <div class="mb-1">${badge}</div>
+            <div class="small">${op.text}</div>
+          </div>
+        </div>`;
+      });
+      return html;
     }
 
     /**
@@ -340,10 +681,7 @@
     }
 
     // =================================================================
-    // 4. RANKING (ランキング - NEW)
-    // =================================================================
-    // =================================================================
-    // 4. RANKING (ランキング - NEW)
+    // 4. RANKING (ランキング)
     // =================================================================
     renderRanking(options) {
       const items = options.items || ['項目A', '項目B', '項目C'];

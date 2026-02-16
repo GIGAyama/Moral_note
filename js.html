@@ -8,9 +8,7 @@
   let currentSession = null;
   let currentPhase = 'BEFORE'; // 授業フェーズ: BEFORE(導入), AFTER(展開/まとめ)
   let scatterChart = null;     // 教師用: 散布図チャートインスタンス
-  let sliderColor = '#1a73e8'; // スライダーの色
   let loadingTimeout = null;   // 読み込み監視用タイマー
-  let selectedTag = '';        // 選択された感情タグ
   let isPageVisible = true;    // ブラウザタブの表示状態（ポーリング制御用）
 
   // Google Drive Picker State
@@ -140,21 +138,7 @@
     }
   }
 
-  function updateSliderColor(val) {
-    // 互換性維持: PatternRendererが独自に色管理しているため、ここは不要になる可能性があるが、
-    // まだ残っている古いコードから呼ばれるかもしれないので残す、または削除。
-    // 今回はPatternRenderer側で style 属性を直接いじっているので、この関数は実質不要だが、
-    // エラー防止のため残しておく。
-    const display = document.getElementById('slider-value-display');
-    if (display) display.innerText = val;
-    // ...
-  }
-
-  function selectTag(el) {
-    document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
-    el.classList.add('active');
-    selectedTag = el.innerText;
-  }
+  // updateSliderColor, selectTag は PatternRenderer に移行済みのため削除
 
   /**
    * Action: 送信
@@ -195,14 +179,7 @@
           return;
         }
 
-        // Filter by current phase if desired, or show all? 
-        // Usually current phase is more relevant for dialogue.
-        // But let's show all for now, maybe sorted by Recency or Phase.
-        // Let's filter by current Phase to avoid spoilers if in BEFORE.
-        // If we are in BEFORE, show BEFORE. If AFTER, show both? Or just AFTER?
-        // User request said "share opinions", implied for dialogue. 
-        // Safe bet: Show opinions matching current phase, OR if CLOSED show all.
-
+        // 現在のフェーズでフィルタ
         const filtered = opinions.filter(o => o.phase === currentPhase);
 
         if (filtered.length === 0) {
@@ -210,20 +187,14 @@
           return;
         }
 
-        list.innerHTML = filtered.map(o => {
-          const valBadge = currentSession.inputType === 'SLIDER'
-            ? `<span class="badge bg-light text-dark border">${o.value}</span>`
-            : `<span class="badge bg-light text-dark border text-wrap">${o.value}</span>`;
+        // オプションをパース
+        let opts = {};
+        try {
+          opts = typeof currentSession.options === 'string' ? JSON.parse(currentSession.options) : (currentSession.options || {});
+        } catch (e) { }
 
-          return `
-          <div class="card mb-2 shadow-sm" style="border-left: 4px solid #17a2b8;">
-            <div class="card-body py-2">
-              <div class="mb-1">${valBadge}</div>
-              <div class="card-text">${o.text}</div>
-            </div>
-          </div>
-        `;
-        }).join('');
+        // PatternRendererのパターン別最適表示を使用
+        patternRenderer.renderOpinionList(currentSession.inputType, list, filtered, opts);
       })
       .catch(err => {
         list.innerHTML = '<p class="text-danger text-center">読み込み失敗</p>';
@@ -234,23 +205,20 @@
     if (!currentUser || !currentSession) return;
 
     const text = document.getElementById('input-text').value;
-    let val = 0;
 
-    if (currentSession.inputType === 'SLIDER') {
-      val = Number(document.getElementById('input-slider').value);
-    } else if (currentSession.inputType === 'TAGS') {
-      if (!selectedTag) {
-        Swal.fire('気持ちを選んでね', '', 'warning');
-        return;
-      }
-      val = selectedTag;
+    // PatternRendererから値を統一取得
+    const val = patternRenderer.getValue();
+
+    if (val === null || val === undefined || val === '') {
+      Swal.fire('入力を確認してね', '', 'warning');
+      return;
     }
 
     const payload = {
       sessionId: currentSession.id,
       studentId: currentUser.id,
       phase: currentPhase,
-      value: val,
+      value: (typeof val === 'object') ? JSON.stringify(val) : val,
       text: text
     };
 
@@ -273,8 +241,6 @@
 
         // フォームリセット
         document.getElementById('input-text').value = '';
-        selectedTag = '';
-        document.querySelectorAll('.emotion-tag').forEach(e => e.classList.remove('active'));
 
         // AIフィードバックを非同期で取得
         document.getElementById('ai-feedback-card').classList.add('d-none');
@@ -386,6 +352,14 @@
       options = {
         centerTheme: document.getElementById('opt-mandala-theme').value || 'テーマ'
       };
+    } else if (type === 'RANKING') {
+      const itemsStr = document.getElementById('opt-ranking-items').value.trim();
+      const items = itemsStr ? itemsStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['項目A', '項目B', '項目C'];
+      options = { items: items };
+    } else if (type === 'CURVE') {
+      const scenesStr = document.getElementById('opt-curve-scenes').value.trim();
+      const scenes = scenesStr ? scenesStr.split(/[,、，]/).map(t => t.trim()).filter(t => t) : ['はじめ', '展開', '山場', '結末'];
+      options = { scenes: scenes };
     } else if (type === 'ACTION') {
       options = {}; // No config
     }
@@ -499,29 +473,9 @@
   function showReflectionView() {
     if (!currentSession || !currentUser) return;
 
-    // セッションの入力モードに応じたUI表示
-    // セッションの入力モードに応じたUI表示 (PatternRenderer)
-    const container = document.getElementById('reflection-pattern-container');
-    // 既存の静的コンテナを削除or非表示にして、PatternRenderer用コンテナを使う
-    // HTML構造上、reflection-input-slider等があるので、それらをwrapする親を作るか、
-    // ここで動的にクリアして使う。
-    // 今回は既存の `reflection-input-slider` などを無視し、新しいコンテナに描画する形に修正すべきだが、
-    // HTMLをいじるよりは、既存要素を隠して新しいコンテナを追加する方が安全。
-
-    // 既存要素を隠す
-    document.getElementById('reflection-input-slider').classList.add('d-none');
-    document.getElementById('reflection-input-tags').classList.add('d-none');
-
-    // PatternRenderer用のコンテナがなければ作成
-    let pContainer = document.getElementById('reflection-pattern-renderer-host');
-    if (!pContainer) {
-      pContainer = document.createElement('div');
-      pContainer.id = 'reflection-pattern-renderer-host';
-      // 挿入場所: Reason (Line 226付近) の前、または既存inputの後
-      const refTextMode = document.getElementById('reflection-input-tags').parentNode;
-      // reflection-input-tags の親は card-body
-      document.getElementById('reflection-input-tags').after(pContainer);
-    }
+    // PatternRenderer用コンテナ（HTML側に定義済み）
+    const pContainer = document.getElementById('reflection-pattern-renderer-host');
+    if (!pContainer) return;
     pContainer.innerHTML = '';
 
     // オプションのパース
@@ -566,6 +520,20 @@
             try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
             display = `<div class="mb-1"><span class="badge bg-success">行動宣言</span></div>`;
             display += `<div class="small bg-light p-1 rounded">いつ: ${jsonVal.when}<br>誰に: ${jsonVal.who}<br>何をする: ${jsonVal.what}</div>`;
+          } else if (currentSession.inputType === 'RANKING') {
+            let jsonVal = val;
+            try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
+            if (jsonVal.items && jsonVal.items.length > 0) {
+              display = `<div class="mb-1"><span class="badge bg-primary">ランキング</span></div>`;
+              display += `<div class="small bg-light p-1 rounded">${jsonVal.items.map((item, i) => `${i + 1}. ${item}`).join('<br>')}</div>`;
+            }
+          } else if (currentSession.inputType === 'CURVE') {
+            let jsonVal = val;
+            try { if (typeof val === 'string') jsonVal = JSON.parse(val); } catch (e) { }
+            if (jsonVal.data && jsonVal.data.length > 0) {
+              display = `<div class="mb-1"><span class="badge bg-secondary">心情曲線</span></div>`;
+              display += `<div class="small bg-light p-1 rounded">${jsonVal.data.map(d => `${d.label}: ${d.value}`).join(' → ')}</div>`;
+            }
           }
           if (beforeLog.text) {
             display += `<div class="mt-1">「${beforeLog.text}」</div>`;
@@ -583,17 +551,7 @@
     showView('view-reflection');
   }
 
-  let selectedReflectionTag = '';
-
-  function selectReflectionTag(el) {
-    document.querySelectorAll('#reflection-tags-container .emotion-tag').forEach(e => e.classList.remove('active'));
-    el.classList.add('active');
-    selectedReflectionTag = el.innerText;
-  }
-
-  function updateReflectionSliderDisplay(val) {
-    document.getElementById('reflection-slider-value').innerText = val;
-  }
+  // selectReflectionTag, updateReflectionSliderDisplay は PatternRenderer に移行済みのため削除
 
   function submitReflection() {
     if (!currentUser || !currentSession) return;
@@ -867,7 +825,7 @@
         maintainAspectRatio: false,
         scales: {
           x: { min: 0, max: 100, title: { display: true, text: '意見の位置' } },
-          y: { min: 0, max: 10, display: false } // Default for SLIDER
+          y: { min: 0, max: 10, display: false }
         },
         plugins: {
           tooltip: {
@@ -886,28 +844,282 @@
     });
   }
 
+  /**
+   * パターン別の教師用可視化を描画
+   */
+  function renderTeacherPatternView(logs) {
+    const container = document.getElementById('chart-pattern-container');
+    if (!container || !currentSession) return;
+
+    const type = currentSession.inputType;
+    let opts = {};
+    try {
+      opts = typeof currentSession.options === 'string' ? JSON.parse(currentSession.options) : (currentSession.options || {});
+    } catch (e) { }
+
+    const beforeLogs = logs.filter(l => l.phase === 'BEFORE');
+    const afterLogs = logs.filter(l => l.phase === 'AFTER');
+
+    let html = `<div class="small text-muted text-end mb-2">回答数: 導入 ${beforeLogs.length}件 / 振り返り ${afterLogs.length}件</div>`;
+
+    if (type === 'TAGS') {
+      // TAGSはフェーズ別のタグ集計を棒グラフ風に表示
+      html += renderTagsTeacherView(beforeLogs, afterLogs);
+    } else if (type === 'RANKING') {
+      html += renderRankingTeacherView(beforeLogs, afterLogs, opts);
+    } else if (type === 'CURVE') {
+      html += `<div style="height: 250px;"><canvas id="teacher-curve-chart"></canvas></div>`;
+      html += renderCurveTeacherTextView(beforeLogs, afterLogs);
+    } else if (type === 'MANDALA') {
+      html += renderMandalaTeacherView(beforeLogs, afterLogs);
+    } else if (type === 'ACTION') {
+      html += renderActionTeacherView(beforeLogs, afterLogs);
+    }
+
+    container.innerHTML = html;
+
+    // CURVEの場合、チャートを描画
+    if (type === 'CURVE') {
+      setTimeout(() => renderCurveTeacherChart(beforeLogs, afterLogs, opts), 100);
+    }
+  }
+
+  function renderTagsTeacherView(beforeLogs, afterLogs) {
+    const beforeCounts = {};
+    const afterCounts = {};
+    beforeLogs.forEach(l => { beforeCounts[l.value] = (beforeCounts[l.value] || 0) + 1; });
+    afterLogs.forEach(l => { afterCounts[l.value] = (afterCounts[l.value] || 0) + 1; });
+
+    const allTags = [...new Set([...Object.keys(beforeCounts), ...Object.keys(afterCounts)])];
+    const maxCount = Math.max(...Object.values(beforeCounts), ...Object.values(afterCounts), 1);
+
+    let html = '<div class="mb-3">';
+    allTags.forEach(tag => {
+      const bCount = beforeCounts[tag] || 0;
+      const aCount = afterCounts[tag] || 0;
+      const bPct = Math.round((bCount / maxCount) * 100);
+      const aPct = Math.round((aCount / maxCount) * 100);
+
+      html += `<div class="mb-3">
+        <div class="fw-bold small mb-1">${tag}</div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="badge bg-primary" style="min-width: 50px;">導入</span>
+          <div class="progress flex-grow-1" style="height: 20px;">
+            <div class="progress-bar bg-primary" style="width: ${bPct}%">${bCount}人</div>
+          </div>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge bg-danger" style="min-width: 50px;">振返り</span>
+          <div class="progress flex-grow-1" style="height: 20px;">
+            <div class="progress-bar bg-danger" style="width: ${aPct}%">${aCount}人</div>
+          </div>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderRankingTeacherView(beforeLogs, afterLogs, opts) {
+    const calcScores = (logs) => {
+      const scores = {};
+      logs.forEach(l => {
+        let val = l.value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        if (val && val.items) {
+          val.items.forEach((item, idx) => {
+            if (!scores[item]) scores[item] = 0;
+            scores[item] += Math.max(val.items.length - idx, 1);
+          });
+        }
+      });
+      return Object.entries(scores).sort((a, b) => b[1] - a[1]);
+    };
+
+    const beforeScores = calcScores(beforeLogs);
+    const afterScores = calcScores(afterLogs);
+    const maxScore = Math.max(
+      beforeScores.length > 0 ? beforeScores[0][1] : 0,
+      afterScores.length > 0 ? afterScores[0][1] : 0,
+      1
+    );
+
+    const renderRankList = (scores, label, color) => {
+      let html = `<h6 class="fw-bold text-${color} small mb-2">${label}</h6>`;
+      scores.forEach(([item, score], idx) => {
+        const pct = Math.round((score / maxScore) * 100);
+        const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `${idx + 1}.`;
+        html += `<div class="d-flex align-items-center mb-1">
+          <span class="me-2" style="min-width: 24px;">${medal}</span>
+          <div class="flex-grow-1">
+            <div class="d-flex justify-content-between small"><span>${item}</span><span class="text-muted">${score}pt</span></div>
+            <div class="progress" style="height: 4px;">
+              <div class="progress-bar bg-${color}" style="width: ${pct}%"></div>
+            </div>
+          </div>
+        </div>`;
+      });
+      return html;
+    };
+
+    return `<div class="row">
+      <div class="col-6">${renderRankList(beforeScores, '導入', 'primary')}</div>
+      <div class="col-6">${renderRankList(afterScores, '振り返り', 'danger')}</div>
+    </div>`;
+  }
+
+  function renderCurveTeacherChart(beforeLogs, afterLogs, opts) {
+    const ctx = document.getElementById('teacher-curve-chart');
+    if (!ctx) return;
+
+    const scenes = opts.scenes || ['はじめ', '展開', '山場', '結末'];
+    const parseData = (logs) => {
+      const sums = new Array(scenes.length).fill(0);
+      let count = 0;
+      logs.forEach(l => {
+        let val = l.value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        if (val && val.data) {
+          val.data.forEach((d, i) => { if (i < sums.length) sums[i] += d.value; });
+          count++;
+        }
+      });
+      return count > 0 ? sums.map(s => Math.round(s / count)) : sums;
+    };
+
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: scenes,
+        datasets: [
+          { label: '導入（平均）', data: parseData(beforeLogs), borderColor: 'rgba(26, 115, 232, 0.8)', borderWidth: 3, tension: 0.3, fill: false, pointRadius: 4 },
+          { label: '振り返り（平均）', data: parseData(afterLogs), borderColor: 'rgba(234, 67, 53, 0.8)', borderWidth: 3, tension: 0.3, fill: false, pointRadius: 4 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { min: 0, max: 100 } },
+        plugins: { legend: { position: 'top' } },
+        animation: false
+      }
+    });
+  }
+
+  function renderCurveTeacherTextView(beforeLogs, afterLogs) {
+    const allLogs = [...beforeLogs.map(l => ({ ...l, phaseLabel: '導入' })), ...afterLogs.map(l => ({ ...l, phaseLabel: '振返り' }))];
+    const withText = allLogs.filter(l => l.text && l.text.trim());
+    if (withText.length === 0) return '';
+
+    let html = '<div class="mt-3 border-top pt-2">';
+    withText.slice(0, 10).forEach(l => {
+      const color = l.phaseLabel === '導入' ? 'primary' : 'danger';
+      html += `<div class="small mb-1"><span class="badge bg-${color} me-1">${l.phaseLabel}</span>${l.text}</div>`;
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function renderMandalaTeacherView(beforeLogs, afterLogs) {
+    const collectWords = (logs) => {
+      const counts = {};
+      logs.forEach(l => {
+        let val = l.value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        if (val && val.items) {
+          val.items.filter(v => v && v.trim()).forEach(item => {
+            counts[item.trim()] = (counts[item.trim()] || 0) + 1;
+          });
+        }
+      });
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    };
+
+    const beforeWords = collectWords(beforeLogs);
+    const afterWords = collectWords(afterLogs);
+
+    const renderCloud = (words, label, color) => {
+      let html = `<h6 class="fw-bold text-${color} small mb-2">${label}</h6>`;
+      html += '<div class="d-flex flex-wrap gap-1 mb-3">';
+      words.slice(0, 15).forEach(([word, count]) => {
+        const size = count >= 3 ? 'fs-6 px-2' : 'small px-1';
+        html += `<span class="badge bg-${color} bg-opacity-75 ${size}">${word}<sup>${count}</sup></span>`;
+      });
+      html += '</div>';
+      return html;
+    };
+
+    return `<div class="row">
+      <div class="col-6">${renderCloud(beforeWords, '導入', 'primary')}</div>
+      <div class="col-6">${renderCloud(afterWords, '振り返り', 'danger')}</div>
+    </div>`;
+  }
+
+  function renderActionTeacherView(beforeLogs, afterLogs) {
+    const renderCards = (logs, label, color) => {
+      let html = `<h6 class="fw-bold text-${color} small mb-2">${label}（${logs.length}件）</h6>`;
+      logs.forEach(l => {
+        let val = l.value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        if (val && typeof val === 'object') {
+          html += `<div class="card mb-1 border-start border-2 border-${color}">
+            <div class="card-body py-1 px-2 small">
+              ${val.what ? `<span class="fw-bold">${val.what}</span>` : ''}
+              ${val.when ? `<span class="text-muted ms-1">(${val.when})</span>` : ''}
+            </div>
+          </div>`;
+        }
+      });
+      return html;
+    };
+
+    return `<div class="row">
+      <div class="col-6">${renderCards(beforeLogs, '導入', 'primary')}</div>
+      <div class="col-6">${renderCards(afterLogs, '振り返り', 'danger')}</div>
+    </div>`;
+  }
+
   function loadScatterData() {
     if (!currentSession) return;
 
+    const type = currentSession.inputType;
+    const useScatter = (type === 'SLIDER' || type === 'QUADRANT');
+
+    // チャートコンテナの切り替え
+    const scatterContainer = document.getElementById('chart-scatter-container');
+    const patternContainer = document.getElementById('chart-pattern-container');
+    if (scatterContainer) scatterContainer.classList.toggle('d-none', !useScatter);
+    if (patternContainer) patternContainer.classList.toggle('d-none', useScatter);
+
     runGoogleScript('getSessionLogs', currentSession.id)
       .then(logs => {
+        if (!useScatter) {
+          // パターン別可視化
+          renderTeacherPatternView(logs);
+          return;
+        }
+
         if (!scatterChart) return;
 
-        // チャートオプションの動的調整
-        const isQuad = currentSession.inputType === 'QUADRANT';
+        // 散布図: SLIDER / QUADRANT
+        const isQuad = type === 'QUADRANT';
         if (isQuad) {
           scatterChart.options.scales.x.min = -100;
           scatterChart.options.scales.x.max = 100;
           scatterChart.options.scales.y.display = true;
           scatterChart.options.scales.y.min = -100;
           scatterChart.options.scales.y.max = 100;
+          scatterChart.options.scales.x.title.text = '';
         } else {
-          // SLIDER Default
           scatterChart.options.scales.x.min = 0;
           scatterChart.options.scales.x.max = 100;
           scatterChart.options.scales.y.display = false;
           scatterChart.options.scales.y.min = 0;
           scatterChart.options.scales.y.max = 10;
+
+          // ラベル設定
+          let opts = {};
+          try { opts = typeof currentSession.options === 'string' ? JSON.parse(currentSession.options) : (currentSession.options || {}); } catch (e) { }
+          scatterChart.options.scales.x.title.text = `${opts.minLabel || 'A'} ← → ${opts.maxLabel || 'B'}`;
         }
 
         const beforeData = [];
@@ -923,9 +1135,8 @@
               y = Number(coord.y);
             } catch (e) { x = 0; y = 0; }
           } else {
-            // SLIDER
             x = Number(l.value) || 0;
-            y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5; // Jitter
+            y = (simpleHash(l.logId || l.studentId || '') % 90) / 10 + 0.5;
           }
 
           const point = { x: x, y: y, text: l.text };
@@ -1000,6 +1211,38 @@
   /**
    * Student Summaries (Teacher Report)
    */
+  /**
+   * パターン別に変容サマリーの値をフォーマット
+   */
+  function formatSummaryValue(type, value, text, color) {
+    let val = value;
+    try { if (typeof val === 'string' && (val.startsWith('{') || val.startsWith('['))) val = JSON.parse(val); } catch (e) { }
+
+    let badge = '';
+    if (type === 'SLIDER') {
+      badge = `<span class="badge bg-${color} me-1">${value}</span>`;
+    } else if (type === 'TAGS') {
+      badge = `<span class="badge bg-${color} me-1">${value}</span>`;
+    } else if (type === 'QUADRANT') {
+      const coord = (typeof val === 'object') ? val : {};
+      badge = `<span class="badge bg-${color} me-1">x:${coord.x || 0} y:${coord.y || 0}</span>`;
+    } else if (type === 'RANKING') {
+      const top = val?.items?.[0] || '-';
+      badge = `<span class="badge bg-${color} me-1">1位: ${top}</span>`;
+    } else if (type === 'CURVE') {
+      badge = `<span class="badge bg-${color} me-1">心情曲線</span>`;
+    } else if (type === 'MANDALA') {
+      const count = val?.items ? val.items.filter(v => v).length : 0;
+      badge = `<span class="badge bg-${color} me-1">${count}個のキーワード</span>`;
+    } else if (type === 'ACTION') {
+      const what = val?.what || '';
+      badge = `<span class="badge bg-${color} me-1">宣言</span><span class="fw-bold">${what}</span>`;
+    } else {
+      badge = `<span class="badge bg-${color} me-1">${value}</span>`;
+    }
+    return `${badge} ${text || ''}`;
+  }
+
   function loadStudentSummaries() {
     if (!currentSession) {
       Swal.fire('授業が選択されていません', '', 'warning');
@@ -1014,10 +1257,11 @@
           container.innerHTML = '<p class="text-muted small">まだ回答がありません</p>';
           return;
         }
+        const type = currentSession.inputType;
         container.innerHTML = summaries.map(s => {
-          const before = s.before ? `<span class="badge bg-primary me-1">${s.before.value}</span>${s.before.text || ''}` : '<span class="text-muted">未回答</span>';
-          const after = s.after ? `<span class="badge bg-danger me-1">${s.after.value}</span>${s.after.text || ''}` : '<span class="text-muted">未回答</span>';
-          const changed = s.before && s.after && s.before.value !== s.after.value;
+          const before = s.before ? formatSummaryValue(type, s.before.value, s.before.text, 'primary') : '<span class="text-muted">未回答</span>';
+          const after = s.after ? formatSummaryValue(type, s.after.value, s.after.text, 'danger') : '<span class="text-muted">未回答</span>';
+          const changed = s.before && s.after && String(s.before.value) !== String(s.after.value);
           return `<div class="border rounded p-2 mb-2 ${changed ? 'border-warning' : ''}">
           <div class="fw-bold">${s.name} <small class="text-muted">(${s.ruby})</small> ${changed ? '<span class="badge bg-warning text-dark">変化あり</span>' : ''}</div>
           <div class="small mt-1"><span class="text-primary">導入:</span> ${before}</div>
@@ -1060,28 +1304,26 @@
         // 2. Render List
         const html = portfolio.map(item => {
           const dateStr = item.date ? new Date(item.date).toLocaleDateString('ja-JP') : '';
+          const typeLabels = {
+            SLIDER: 'スライダー', TAGS: '感情タグ', QUADRANT: '座標軸',
+            RANKING: 'ランキング', CURVE: '心情曲線', MANDALA: 'マンダラ', ACTION: '宣言カード'
+          };
           let body = '';
 
           // Before
           if (item.before) {
-            const valDisplay = item.inputType === 'SLIDER'
-              ? `<span class="badge bg-primary">${item.before.value}</span>`
-              : `<span class="badge bg-primary text-wrap">${item.before.value}</span>`;
-            body += `<div class="small mb-1"><span class="fw-bold me-2">導入</span> ${valDisplay} ${item.before.text ? '「' + item.before.text + '」' : ''}</div>`;
+            body += `<div class="small mb-1"><span class="fw-bold text-primary me-2">導入</span> ${formatSummaryValue(item.inputType, item.before.value, item.before.text, 'primary')}</div>`;
           }
 
           // After
           if (item.after) {
-            const valDisplay = item.inputType === 'SLIDER'
-              ? `<span class="badge bg-danger">${item.after.value}</span>`
-              : `<span class="badge bg-danger text-wrap">${item.after.value}</span>`;
-            body += `<div class="small"><span class="fw-bold me-2">振り返り</span> ${valDisplay} ${item.after.text ? '「' + item.after.text + '」' : ''}</div>`;
+            body += `<div class="small"><span class="fw-bold text-danger me-2">振り返り</span> ${formatSummaryValue(item.inputType, item.after.value, item.after.text, 'danger')}</div>`;
           }
 
           return `<div class="card mb-2">
           <div class="card-body py-2">
             <div class="d-flex justify-content-between">
-              <span class="fw-bold text-truncate">${item.title}</span>
+              <span class="fw-bold text-truncate">${item.title} <span class="badge bg-light text-muted border small">${typeLabels[item.inputType] || item.inputType}</span></span>
               <small class="text-muted">${dateStr}</small>
             </div>
             <hr class="my-1">
@@ -1169,7 +1411,16 @@
         }
 
         container.innerHTML = units.map(u => {
-          const typeLabel = u.inputType === 'SLIDER' ? '<span class="badge bg-info text-dark">スライダー</span>' : '<span class="badge bg-warning text-dark">感情タグ</span>';
+          const typeLabels = {
+            SLIDER: '<span class="badge bg-info text-dark">スライダー</span>',
+            TAGS: '<span class="badge bg-warning text-dark">感情タグ</span>',
+            QUADRANT: '<span class="badge bg-secondary">座標軸</span>',
+            RANKING: '<span class="badge bg-primary">ランキング</span>',
+            CURVE: '<span class="badge bg-success">心情曲線</span>',
+            MANDALA: '<span class="badge bg-warning text-dark">マンダラ</span>',
+            ACTION: '<span class="badge bg-success">宣言カード</span>'
+          };
+          const typeLabel = typeLabels[u.inputType] || `<span class="badge bg-light text-dark">${u.inputType}</span>`;
           const dateStr = new Date(u.createdAt).toLocaleDateString();
 
           return `<div class="list-group-item list-group-item-action" onclick="editUnit('${u.unitId}')" style="cursor: pointer;">
@@ -1260,8 +1511,11 @@
 
   function toggleUnitEditOptions() {
     const type = document.getElementById('edit-unit-type').value;
-    document.getElementById('edit-unit-opts-slider').classList.toggle('d-none', type !== 'SLIDER');
-    document.getElementById('edit-unit-opts-tags').classList.toggle('d-none', type !== 'TAGS');
+    const types = ['slider', 'tags', 'quadrant', 'ranking', 'curve', 'mandala'];
+    types.forEach(t => {
+      const el = document.getElementById('edit-unit-opts-' + t);
+      if (el) el.classList.toggle('d-none', type !== t.toUpperCase());
+    });
   }
 
   function clearUnitForm() {
@@ -1286,11 +1540,23 @@
 
       toggleUnitEditOptions();
 
+      const opts = u.options || {};
       if (u.inputType === 'SLIDER') {
-        document.getElementById('edit-unit-min').value = u.options.minLabel || '';
-        document.getElementById('edit-unit-max').value = u.options.maxLabel || '';
-      } else {
-        document.getElementById('edit-unit-tags').value = (u.options.tags || []).join(',');
+        document.getElementById('edit-unit-min').value = opts.minLabel || '';
+        document.getElementById('edit-unit-max').value = opts.maxLabel || '';
+      } else if (u.inputType === 'TAGS') {
+        document.getElementById('edit-unit-tags').value = (opts.tags || []).join(',');
+      } else if (u.inputType === 'QUADRANT') {
+        document.getElementById('edit-unit-quad-xmin').value = opts.xAxisLabel?.[0] || '';
+        document.getElementById('edit-unit-quad-xmax').value = opts.xAxisLabel?.[1] || '';
+        document.getElementById('edit-unit-quad-ymin').value = opts.yAxisLabel?.[0] || '';
+        document.getElementById('edit-unit-quad-ymax').value = opts.yAxisLabel?.[1] || '';
+      } else if (u.inputType === 'RANKING') {
+        document.getElementById('edit-unit-ranking-items').value = (opts.items || []).join(',');
+      } else if (u.inputType === 'CURVE') {
+        document.getElementById('edit-unit-curve-scenes').value = (opts.scenes || []).join(',');
+      } else if (u.inputType === 'MANDALA') {
+        document.getElementById('edit-unit-mandala-theme').value = opts.centerTheme || '';
       }
     });
   }
@@ -1306,14 +1572,32 @@
     if (type === 'SLIDER') {
       options = {
         minLabel: document.getElementById('edit-unit-min').value || 'A',
-        maxLabel: document.getElementById('edit-unit-max').value || 'B',
-        tags: []
+        maxLabel: document.getElementById('edit-unit-max').value || 'B'
       };
-    } else {
+    } else if (type === 'TAGS') {
       const tVal = document.getElementById('edit-unit-tags').value;
+      options = { tags: tVal ? tVal.split(/[,、，]/).map(t => t.trim()) : ['共感', '疑問', '納得', '驚き'] };
+    } else if (type === 'QUADRANT') {
       options = {
-        tags: tVal ? tVal.split(/[,、，]/) : ['A', 'B']
+        xAxisLabel: [
+          document.getElementById('edit-unit-quad-xmin').value || '左',
+          document.getElementById('edit-unit-quad-xmax').value || '右'
+        ],
+        yAxisLabel: [
+          document.getElementById('edit-unit-quad-ymin').value || '下',
+          document.getElementById('edit-unit-quad-ymax').value || '上'
+        ]
       };
+    } else if (type === 'RANKING') {
+      const rVal = document.getElementById('edit-unit-ranking-items').value;
+      options = { items: rVal ? rVal.split(/[,、，]/).map(t => t.trim()) : ['項目A', '項目B', '項目C'] };
+    } else if (type === 'CURVE') {
+      const cVal = document.getElementById('edit-unit-curve-scenes').value;
+      options = { scenes: cVal ? cVal.split(/[,、，]/).map(t => t.trim()) : ['はじめ', '展開', '山場', '結末'] };
+    } else if (type === 'MANDALA') {
+      options = { centerTheme: document.getElementById('edit-unit-mandala-theme').value || 'テーマ' };
+    } else if (type === 'ACTION') {
+      options = {};
     }
 
     const memo = document.getElementById('edit-unit-memo').value;
