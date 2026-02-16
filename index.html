@@ -272,12 +272,17 @@
       <ul class="nav nav-pills nav-fill mb-4">
         <li class="nav-item">
           <button class="nav-link active" id="btn-mode-prep" onclick="switchTeacherMode('prep')">
-            <i class="bi bi-tools"></i> 授業準備・設定
+            <i class="bi bi-tools"></i> 授業準備
           </button>
         </li>
         <li class="nav-item">
           <button class="nav-link" id="btn-mode-class" onclick="switchTeacherMode('class')">
-            <i class="bi bi-display"></i> 授業実施・黒板
+            <i class="bi bi-display"></i> 授業実施
+          </button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link" id="btn-mode-history" onclick="switchTeacherMode('history')">
+            <i class="bi bi-clock-history"></i> 学習履歴
           </button>
         </li>
       </ul>
@@ -295,6 +300,14 @@
               <li class="nav-item" role="presentation">
                 <button class="nav-link" id="tab-units" data-bs-toggle="tab" data-bs-target="#content-units"
                   type="button" role="tab" onclick="loadUnits()">単元管理</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-roster"
+                  type="button" role="tab">名簿管理</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-settings"
+                  type="button" role="tab">設定</button>
               </li>
             </ul>
           </div>
@@ -468,54 +481,37 @@
                   </div>
                 </div>
               </div><!-- end tab-pane -->
-            </div>
-          </div>
-        </div>
 
-        <!-- Prep Mode: Roster & Settings Row -->
-        <div class="row">
-          <!-- Roster Management -->
-          <div class="col-md-7">
-            <div class="card shadow-sm border-0 mb-4 h-100">
-              <div class="card-header bg-white py-3">
-                <h5 class="mb-0 text-primary h6"><i class="bi bi-people"></i> 名簿管理</h5>
-              </div>
-              <div class="card-body p-0">
-                <div id="roster-list" class="list-group list-group-flush" style="max-height: 400px; overflow-y: auto;">
+              <!-- Tab: 名簿管理 -->
+              <div class="tab-pane fade" id="content-roster" role="tabpanel">
+                <div id="roster-list" class="list-group list-group-flush border rounded mb-3"
+                  style="max-height: 400px; overflow-y: auto;">
                   <!-- JS populated -->
                 </div>
-              </div>
-              <div class="card-footer bg-light p-3">
-                <div class="input-group input-group-sm mb-2">
-                  <input type="text" class="form-control" id="new-student-name" placeholder="名前">
-                  <input type="text" class="form-control" id="new-student-ruby" placeholder="ふりがな">
+                <div class="bg-light rounded p-3">
+                  <div class="input-group input-group-sm mb-2">
+                    <input type="text" class="form-control" id="new-student-name" placeholder="名前">
+                    <input type="text" class="form-control" id="new-student-ruby" placeholder="ふりがな">
+                  </div>
+                  <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-success flex-grow-1" onclick="addNewStudent()">
+                      <i class="bi bi-person-plus"></i> 追加
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary flex-grow-1" onclick="registerBulkStudents()">
+                      <i class="bi bi-file-earmark-spreadsheet"></i> 一括登録
+                    </button>
+                  </div>
                 </div>
-                <div class="d-flex gap-2">
-                  <button class="btn btn-sm btn-outline-success flex-grow-1" onclick="addNewStudent()">
-                    <i class="bi bi-person-plus"></i> 追加
-                  </button>
-                  <button class="btn btn-sm btn-outline-secondary flex-grow-1" onclick="registerBulkStudents()">
-                    <i class="bi bi-file-earmark-spreadsheet"></i> 一括登録
-                  </button>
-                </div>
               </div>
-            </div>
-          </div>
 
-          <!-- Settings (Gemini) -->
-          <div class="col-md-5">
-            <div class="card shadow-sm border-0 mb-4 h-100">
-              <div class="card-header bg-white py-3">
-                <h5 class="mb-0 text-primary h6"><i class="bi bi-gear"></i> 設定</h5>
-              </div>
-              <div class="card-body p-4">
+              <!-- Tab: 設定 -->
+              <div class="tab-pane fade" id="content-settings" role="tabpanel">
                 <label class="form-label small fw-bold">Gemini API Key</label>
                 <div class="input-group input-group-sm mb-3">
                   <input type="password" class="form-control" id="gemini-api-key-input" placeholder="API Key">
                   <button class="btn btn-outline-secondary" onclick="saveApiKey()">保存</button>
                 </div>
                 <p class="text-muted status-text small mb-0" id="gemini-status">Status: Checking...</p>
-
                 <hr class="my-4">
                 <div class="d-grid gap-2">
                   <button class="btn btn-outline-danger btn-sm"
@@ -524,6 +520,7 @@
                   </button>
                 </div>
               </div>
+
             </div>
           </div>
         </div>
@@ -590,6 +587,97 @@
           </div>
         </div>
       </div><!-- End Class Mode -->
+
+      <!-- MODE: History (学習履歴・所見) -->
+      <div id="teacher-mode-history" class="d-none">
+        <div class="card shadow-sm border-0 mb-4">
+          <div class="card-header bg-white py-3">
+            <ul class="nav nav-tabs card-header-tabs" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#content-history-unit"
+                  type="button" role="tab">単元別履歴</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-history-student"
+                  type="button" role="tab">児童別履歴</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-observation"
+                  type="button" role="tab">所見作成</button>
+              </li>
+            </ul>
+          </div>
+          <div class="card-body p-4">
+            <div class="tab-content">
+
+              <!-- Tab: 単元別履歴 -->
+              <div class="tab-pane fade show active" id="content-history-unit" role="tabpanel">
+                <div class="mb-3">
+                  <label class="form-label small text-muted">実施済み授業を選択</label>
+                  <select class="form-select" id="history-session-select"
+                    onchange="loadSessionHistory(this.value)">
+                    <option value="">-- 授業を選んでください --</option>
+                  </select>
+                </div>
+                <div id="history-session-detail">
+                  <div class="text-center text-muted py-5">
+                    <i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i>
+                    <p>上のドロップダウンから授業を選ぶと、<br>全児童の学習記録が表示されます</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Tab: 児童別履歴 -->
+              <div class="tab-pane fade" id="content-history-student" role="tabpanel">
+                <div class="mb-3">
+                  <label class="form-label small text-muted">児童を選択</label>
+                  <select class="form-select" id="history-student-select"
+                    onchange="loadStudentHistoryView(this.value)">
+                    <option value="">-- 児童を選んでください --</option>
+                  </select>
+                </div>
+                <div id="history-student-detail">
+                  <div class="text-center text-muted py-5">
+                    <i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i>
+                    <p>上のドロップダウンから児童を選ぶと、<br>その児童の全授業記録が表示されます</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Tab: 所見作成 -->
+              <div class="tab-pane fade" id="content-observation" role="tabpanel">
+                <div class="mb-3">
+                  <label class="form-label small text-muted">児童を選択</label>
+                  <select class="form-select" id="observation-student-select"
+                    onchange="previewStudentForObservation(this.value)">
+                    <option value="">-- 児童を選んでください --</option>
+                  </select>
+                </div>
+                <div id="observation-preview" class="mb-3"></div>
+                <button class="btn btn-primary w-100 mb-3 d-none" id="btn-generate-observation"
+                  onclick="generateObservationForStudent()">
+                  <i class="bi bi-magic me-1"></i> AIで所見を作成
+                </button>
+                <div id="observation-result" class="d-none">
+                  <label class="form-label fw-bold"><i class="bi bi-file-text me-1"></i>生成された所見</label>
+                  <textarea class="form-control mb-2" id="observation-text" rows="8"
+                    style="font-size: 1rem; line-height: 1.8;"></textarea>
+                  <div class="d-flex gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="copyObservation()">
+                      <i class="bi bi-clipboard me-1"></i>コピー
+                    </button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="generateObservationForStudent()">
+                      <i class="bi bi-arrow-repeat me-1"></i>再生成
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div><!-- End History Mode -->
+
     </div>
 
 

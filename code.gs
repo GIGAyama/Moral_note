@@ -861,6 +861,102 @@ function hasGeminiApiKey() {
 // =================================================================
 
 /**
+ * 全授業セッション一覧を取得（履歴表示用）
+ */
+function getAllSessions() {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  return sheet.getDataRange().getValues().slice(1)
+    .filter(r => !r[7])
+    .map(r => {
+      let opts = {};
+      try { opts = r[4] ? JSON.parse(r[4]) : {}; } catch (e) { }
+      return {
+        id: r[0],
+        date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]),
+        title: r[2],
+        inputType: r[3],
+        options: opts,
+        status: r[5],
+        phase: r[6]
+      };
+    })
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+/**
+ * AIによる所見自動作成
+ * 児童の全学習記録をもとに通知表用の所見文を生成します
+ */
+function generateObservation(studentId) {
+  const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
+  if (!apiKey) return { success: false, error: 'Gemini APIキーを設定してください' };
+
+  const ss = getDB();
+  const userSheet = ss.getSheetByName('名簿');
+  const users = userSheet.getDataRange().getValues().slice(1);
+  const student = users.find(r => r[0] === studentId && !r[3]);
+  if (!student) return { success: false, error: '児童が見つかりません' };
+
+  const portfolio = getStudentPortfolio(studentId);
+  if (!portfolio || portfolio.length === 0) return { success: false, error: '学習記録がありません' };
+
+  const typeLabel = { SLIDER: 'スライダー', TAGS: '感情タグ', QUADRANT: '座標軸', RANKING: 'ランキング', CURVE: '心情曲線', MANDALA: 'マンダラ', ACTION: '宣言カード' };
+
+  const historyText = portfolio.map(p => {
+    let entry = `【${p.title}】(形式:${typeLabel[p.inputType] || p.inputType}, 日付:${new Date(p.date).toLocaleDateString('ja-JP')})`;
+    if (p.before) entry += `\n  導入時: 値=${p.before.value}, 記述="${p.before.text || '（なし）'}"`;
+    if (p.after) entry += `\n  振り返り: 値=${p.after.value}, 記述="${p.after.text || '（なし）'}"`;
+    return entry;
+  }).join('\n\n');
+
+  const prompt = `あなたはベテランの小学校教師です。道徳の授業における児童の学習記録を分析し、通知表に記載する「所見」を作成してください。
+
+【児童名】${student[1]}（${student[2]}）
+
+【学習記録（${portfolio.length}回分）】
+${historyText}
+
+【所見作成のルール】
+- 200〜300文字程度で簡潔にまとめる
+- 児童の成長や変容を具体的に記述する
+- 導入時と振り返り時の変化に注目する
+- 記述内容から読み取れる思考の深まりを評価する
+- ポジティブな表現を中心にしつつ、今後の課題も示唆する
+- 「〜できました」「〜が見られました」などの所見文体で書く
+- 具体的な授業名やエピソードを含める
+
+所見文のみを出力してください（説明や前置き不要）。`;
+
+  try {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    const payload = {
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 500, temperature: 0.5 }
+    };
+
+    const response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    const json = JSON.parse(response.getContentText());
+    if (json.candidates && json.candidates[0] && json.candidates[0].content) {
+      const observation = json.candidates[0].content.parts[0].text.trim();
+      return { success: true, observation: observation, name: student[1], ruby: student[2] };
+    }
+    return { success: false, error: 'AIからの応答がありませんでした' };
+  } catch (e) {
+    console.error('Gemini API Error:', e);
+    return { success: false, error: e.toString() };
+  }
+}
+
+/**
  * 教師用パスワードの照合
  */
 function checkTeacherPassword(password) {

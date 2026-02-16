@@ -618,13 +618,16 @@
   }
 
   function switchTeacherMode(mode) {
-    // Toggle Nav
-    document.getElementById('btn-mode-prep').classList.toggle('active', mode === 'prep');
-    document.getElementById('btn-mode-class').classList.toggle('active', mode === 'class');
+    ['prep', 'class', 'history'].forEach(m => {
+      const btn = document.getElementById('btn-mode-' + m);
+      if (btn) btn.classList.toggle('active', mode === m);
+      const panel = document.getElementById('teacher-mode-' + m);
+      if (panel) panel.classList.toggle('d-none', mode !== m);
+    });
 
-    // Toggle View
-    document.getElementById('teacher-mode-prep').classList.toggle('d-none', mode !== 'prep');
-    document.getElementById('teacher-mode-class').classList.toggle('d-none', mode !== 'class');
+    if (mode === 'history') {
+      loadHistoryDropdowns();
+    }
   }
 
   /**
@@ -1436,9 +1439,261 @@
       .catch(showError);
   }
 
-  /**
-   * My Log (Student History)
-   */
+  // =================================================================
+  // TEACHER: 学習履歴・所見 (HISTORY & OBSERVATION)
+  // =================================================================
+
+  const TYPE_LABELS = { SLIDER: 'スライダー', TAGS: '感情タグ', QUADRANT: '座標軸', RANKING: 'ランキング', CURVE: '心情曲線', MANDALA: 'マンダラ', ACTION: '宣言カード' };
+
+  function loadHistoryDropdowns() {
+    // セッション一覧ロード
+    runGoogleScript('getAllSessions').then(sessions => {
+      const sel = document.getElementById('history-session-select');
+      if (!sel) return;
+      sel.innerHTML = '<option value="">-- 授業を選んでください --</option>';
+      (sessions || []).forEach(s => {
+        const d = new Date(s.date).toLocaleDateString('ja-JP');
+        const type = TYPE_LABELS[s.inputType] || s.inputType;
+        const status = s.status === 'ACTIVE' ? ' [実施中]' : '';
+        sel.innerHTML += `<option value="${s.id}">${d} ${s.title} (${type})${status}</option>`;
+      });
+    });
+
+    // 児童一覧ロード（児童別履歴 + 所見作成用）
+    runGoogleScript('getStudents').then(res => {
+      const users = res?.users || [];
+      ['history-student-select', 'observation-student-select'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        sel.innerHTML = '<option value="">-- 児童を選んでください --</option>';
+        users.forEach(u => {
+          sel.innerHTML += `<option value="${u.id}">${u.name}（${u.ruby}）</option>`;
+        });
+      });
+    });
+  }
+
+  // --- 単元別履歴 ---
+  function loadSessionHistory(sessionId) {
+    const container = document.getElementById('history-session-detail');
+    if (!sessionId) {
+      container.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i><p>授業を選んでください</p></div>';
+      return;
+    }
+
+    container.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
+
+    runGoogleScript('getStudentSummaries', sessionId).then(summaries => {
+      if (!summaries || summaries.length === 0) {
+        container.innerHTML = '<div class="alert alert-info">この授業にはまだ記録がありません</div>';
+        return;
+      }
+
+      // セッション情報を取得
+      const sel = document.getElementById('history-session-select');
+      const selectedText = sel.options[sel.selectedIndex]?.text || '';
+
+      let html = `<div class="mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 class="fw-bold text-primary mb-0"><i class="bi bi-journal-text me-1"></i>${selectedText}</h6>
+          <span class="badge bg-primary bg-opacity-10 text-primary">${summaries.length}名</span>
+        </div>
+        <hr class="my-2">
+      </div>`;
+
+      html += `<div class="table-responsive"><table class="table table-sm table-hover align-middle">
+        <thead class="table-light">
+          <tr>
+            <th style="width:120px;">名前</th>
+            <th>導入時</th>
+            <th>振り返り</th>
+            <th style="width:60px;">変容</th>
+          </tr>
+        </thead><tbody>`;
+
+      summaries.forEach(s => {
+        const bText = s.before?.text || '';
+        const aText = s.after?.text || '';
+        const bVal = s.before?.value ?? '-';
+        const aVal = s.after?.value ?? '-';
+
+        let change = '';
+        if (s.before && s.after) {
+          change = '<span class="badge bg-success bg-opacity-10 text-success"><i class="bi bi-check-circle"></i></span>';
+        } else if (s.before && !s.after) {
+          change = '<span class="badge bg-warning bg-opacity-10 text-warning">未</span>';
+        }
+
+        html += `<tr>
+          <td class="fw-bold">${s.name}<br><small class="text-muted">${s.ruby}</small></td>
+          <td><small class="badge bg-info bg-opacity-10 text-info me-1">${String(bVal).substring(0, 15)}</small><br><small class="text-muted">${bText ? bText.substring(0, 40) + (bText.length > 40 ? '...' : '') : ''}</small></td>
+          <td><small class="badge bg-success bg-opacity-10 text-success me-1">${String(aVal).substring(0, 15)}</small><br><small class="text-muted">${aText ? aText.substring(0, 40) + (aText.length > 40 ? '...' : '') : ''}</small></td>
+          <td class="text-center">${change}</td>
+        </tr>`;
+      });
+
+      html += `</tbody></table></div>`;
+      container.innerHTML = html;
+    }).catch(() => {
+      container.innerHTML = '<div class="alert alert-danger">読み込みに失敗しました</div>';
+    });
+  }
+
+  // --- 児童別履歴 ---
+  function loadStudentHistoryView(studentId) {
+    const container = document.getElementById('history-student-detail');
+    if (!studentId) {
+      container.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i><p>児童を選んでください</p></div>';
+      return;
+    }
+
+    container.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
+
+    runGoogleScript('getStudentPortfolio', studentId).then(portfolio => {
+      if (!portfolio || portfolio.length === 0) {
+        container.innerHTML = '<div class="alert alert-info">この児童にはまだ記録がありません</div>';
+        return;
+      }
+
+      const sel = document.getElementById('history-student-select');
+      const studentName = sel.options[sel.selectedIndex]?.text || '';
+
+      let html = `<div class="mb-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <h6 class="fw-bold text-primary mb-0"><i class="bi bi-person me-1"></i>${studentName}</h6>
+          <span class="badge bg-primary bg-opacity-10 text-primary">${portfolio.length}回</span>
+        </div>
+        <hr class="my-2">
+      </div>`;
+
+      portfolio.forEach((p, idx) => {
+        const d = new Date(p.date).toLocaleDateString('ja-JP');
+        const type = TYPE_LABELS[p.inputType] || p.inputType;
+        const hasChange = p.before && p.after;
+        const borderColor = hasChange ? 'border-success' : 'border-secondary';
+
+        html += `<div class="card mb-2 border-start border-3 ${borderColor}">
+          <div class="card-body py-2 px-3">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <span class="fw-bold">${p.title}</span>
+                <span class="badge bg-light text-muted ms-2">${type}</span>
+              </div>
+              <small class="text-muted">${d}</small>
+            </div>`;
+
+        if (p.before) {
+          const bVal = String(p.before.value || '').substring(0, 20);
+          html += `<div class="mt-1"><small class="text-muted">導入:</small> <small class="badge bg-info bg-opacity-10 text-info">${bVal}</small>`;
+          if (p.before.text) html += ` <small class="text-muted">${p.before.text.substring(0, 50)}${p.before.text.length > 50 ? '...' : ''}</small>`;
+          html += `</div>`;
+        }
+
+        if (p.after) {
+          const aVal = String(p.after.value || '').substring(0, 20);
+          html += `<div class="mt-1"><small class="text-muted">振り返り:</small> <small class="badge bg-success bg-opacity-10 text-success">${aVal}</small>`;
+          if (p.after.text) html += ` <small class="text-muted">${p.after.text.substring(0, 50)}${p.after.text.length > 50 ? '...' : ''}</small>`;
+          html += `</div>`;
+        }
+
+        html += `</div></div>`;
+      });
+
+      container.innerHTML = html;
+    }).catch(() => {
+      container.innerHTML = '<div class="alert alert-danger">読み込みに失敗しました</div>';
+    });
+  }
+
+  // --- 所見作成 ---
+  function previewStudentForObservation(studentId) {
+    const preview = document.getElementById('observation-preview');
+    const btn = document.getElementById('btn-generate-observation');
+    const result = document.getElementById('observation-result');
+
+    if (!studentId) {
+      preview.innerHTML = '';
+      btn.classList.add('d-none');
+      result.classList.add('d-none');
+      return;
+    }
+
+    preview.innerHTML = '<div class="text-center py-3"><div class="spinner-border spinner-border-sm text-primary"></div></div>';
+
+    runGoogleScript('getStudentPortfolio', studentId).then(portfolio => {
+      if (!portfolio || portfolio.length === 0) {
+        preview.innerHTML = '<div class="alert alert-info">この児童にはまだ記録がありません</div>';
+        btn.classList.add('d-none');
+        return;
+      }
+
+      let html = `<div class="card border">
+        <div class="card-header bg-light py-2">
+          <small class="fw-bold"><i class="bi bi-journal-text me-1"></i>学習記録プレビュー（${portfolio.length}回分）</small>
+        </div>
+        <div class="card-body p-0" style="max-height: 250px; overflow-y: auto;">
+          <table class="table table-sm mb-0">
+            <thead class="table-light sticky-top"><tr><th>授業</th><th>形式</th><th>導入</th><th>振り返り</th></tr></thead>
+            <tbody>`;
+
+      portfolio.forEach(p => {
+        const d = new Date(p.date).toLocaleDateString('ja-JP');
+        const type = TYPE_LABELS[p.inputType] || p.inputType;
+        html += `<tr>
+          <td><small>${p.title}<br><span class="text-muted">${d}</span></small></td>
+          <td><small>${type}</small></td>
+          <td><small>${p.before?.text ? p.before.text.substring(0, 30) + '...' : '-'}</small></td>
+          <td><small>${p.after?.text ? p.after.text.substring(0, 30) + '...' : '-'}</small></td>
+        </tr>`;
+      });
+
+      html += `</tbody></table></div></div>`;
+      preview.innerHTML = html;
+      btn.classList.remove('d-none');
+      result.classList.add('d-none');
+    }).catch(() => {
+      preview.innerHTML = '<div class="alert alert-danger">読み込みに失敗しました</div>';
+    });
+  }
+
+  function generateObservationForStudent() {
+    const sel = document.getElementById('observation-student-select');
+    const studentId = sel.value;
+    if (!studentId) return;
+
+    const btn = document.getElementById('btn-generate-observation');
+    const result = document.getElementById('observation-result');
+    const textarea = document.getElementById('observation-text');
+
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>AIが所見を作成中...';
+
+    runGoogleScript('generateObservation', studentId)
+      .then(res => {
+        if (res.success) {
+          textarea.value = res.observation;
+          result.classList.remove('d-none');
+          Swal.fire({ icon: 'success', title: '所見を作成しました', timer: 1500, showConfirmButton: false });
+        } else {
+          Swal.fire({ icon: 'error', title: 'エラー', text: res.error || '所見の作成に失敗しました' });
+        }
+      })
+      .catch(err => {
+        Swal.fire({ icon: 'error', title: 'エラー', text: '通信エラーが発生しました' });
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-magic me-1"></i> AIで所見を作成';
+      });
+  }
+
+  function copyObservation() {
+    const textarea = document.getElementById('observation-text');
+    textarea.select();
+    document.execCommand('copy');
+    Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+  }
+
   /**
    * My Log (Student History)
    */
