@@ -888,6 +888,469 @@
       `;
       this.container.innerHTML = html;
     }
+
+    // =================================================================
+    // FULLSCREEN OPINION VIEW
+    // パターン別にフルスクリーン最適化されたレイアウトで描画
+    // 左右分割: QUADRANT, MANDALA（左に図、右に意見一覧）
+    // 上下分割: SLIDER, TAGS, RANKING, CURVE, ACTION（上に図、下に意見一覧）
+    // =================================================================
+
+    renderOpinionListFullscreen(patternType, container, opinions, options) {
+      container.innerHTML = '';
+      if (!opinions || opinions.length === 0) {
+        container.innerHTML = '<div class="text-center text-muted fs-3 py-5"><i class="bi bi-chat-dots d-block fs-1 mb-3"></i>まだ意見がありません</div>';
+        return;
+      }
+
+      const opts = options || {};
+      const isHorizontal = (patternType === 'QUADRANT' || patternType === 'MANDALA');
+
+      if (isHorizontal) {
+        this._fsRenderHorizontal(patternType, container, opinions, opts);
+      } else {
+        this._fsRenderVertical(patternType, container, opinions, opts);
+      }
+    }
+
+    // --- Horizontal Layout (Left: Viz, Right: List) ---
+    _fsRenderHorizontal(patternType, container, opinions, opts) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'fs-layout-horizontal';
+
+      const vizPanel = document.createElement('div');
+      vizPanel.className = 'fs-viz';
+
+      const listPanel = document.createElement('div');
+      listPanel.className = 'fs-list';
+
+      wrapper.appendChild(vizPanel);
+      wrapper.appendChild(listPanel);
+      container.appendChild(wrapper);
+
+      if (patternType === 'QUADRANT') {
+        this._fsQuadrantViz(vizPanel, opinions, opts);
+      } else {
+        this._fsMandalaViz(vizPanel, opinions, opts);
+      }
+
+      this._fsTextCards(listPanel, opinions, patternType);
+    }
+
+    // --- Vertical Layout (Top: Viz, Bottom: List) ---
+    _fsRenderVertical(patternType, container, opinions, opts) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'fs-layout-vertical';
+
+      const vizSection = document.createElement('div');
+      vizSection.className = 'fs-viz-box';
+
+      const listSection = document.createElement('div');
+
+      wrapper.appendChild(vizSection);
+      wrapper.appendChild(listSection);
+      container.appendChild(wrapper);
+
+      switch (patternType) {
+        case 'SLIDER':
+          this._fsSliderViz(vizSection, opinions, opts);
+          this._fsTextCards(listSection, opinions, patternType);
+          break;
+        case 'TAGS':
+          this._fsTagsViz(vizSection, opinions, opts);
+          this._fsTextCards(listSection, opinions, patternType);
+          break;
+        case 'RANKING':
+          this._fsRankingViz(vizSection, opinions, opts);
+          this._fsTextCards(listSection, opinions, patternType);
+          break;
+        case 'CURVE':
+          this._fsCurveViz(vizSection, opinions, opts);
+          this._fsTextCards(listSection, opinions, patternType);
+          break;
+        case 'ACTION':
+          vizSection.remove();
+          this._fsActionCards(listSection, opinions);
+          break;
+        default:
+          vizSection.remove();
+          this._fsTextCards(listSection, opinions, patternType);
+      }
+    }
+
+    // =========================================================
+    // FULLSCREEN: SLIDER (Top-Bottom)
+    // 分布バー（大）+ 意見カード
+    // =========================================================
+    _fsSliderViz(container, opinions, opts) {
+      const minLabel = opts.minLabel || 'A';
+      const maxLabel = opts.maxLabel || 'B';
+      const values = opinions.map(o => Number(o.value) || 50);
+      const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+
+      let html = `
+        <div class="text-center mb-3">
+          <span class="badge bg-primary bg-opacity-10 text-primary fs-5 px-4 py-2">
+            <i class="bi bi-people-fill me-1"></i>${opinions.length}人の<ruby>回答<rt>かいとう</rt></ruby>
+          </span>
+        </div>
+        <div class="d-flex justify-content-between mb-2 px-1">
+          <span class="fw-bold fs-4 text-primary">${minLabel}</span>
+          <span class="fw-bold fs-4 text-danger">${maxLabel}</span>
+        </div>
+        <div class="position-relative bg-light rounded-pill mx-1" style="height: 52px; border: 2px solid #dee2e6;">`;
+
+      values.forEach(v => {
+        html += `<div class="position-absolute bg-primary rounded-circle border border-2 border-white shadow-sm"
+          style="width: 18px; height: 18px; left: ${v}%; top: 50%; transform: translate(-50%, -50%); opacity: 0.7;"></div>`;
+      });
+
+      html += `<div class="position-absolute" style="left: ${avg}%; top: -12px; transform: translateX(-50%); z-index: 5;">
+          <div class="bg-danger text-white fw-bold px-3 py-1 rounded-pill text-center" style="font-size: 0.85rem; white-space: nowrap;">
+            <ruby>平均<rt>へいきん</rt></ruby> ${avg}
+          </div>
+          <div class="bg-danger mx-auto" style="width: 3px; height: 60px;"></div>
+        </div>`;
+
+      html += `</div>`;
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: TAGS (Top-Bottom)
+    // タグ集計バッジ（大）+ グループ別意見
+    // =========================================================
+    _fsTagsViz(container, opinions, opts) {
+      const groups = {};
+      opinions.forEach(op => {
+        const tag = op.value || '不明';
+        if (!groups[tag]) groups[tag] = [];
+        groups[tag].push(op);
+      });
+
+      const colors = ['primary', 'success', 'warning', 'info', 'danger', 'secondary'];
+      const sortedTags = Object.keys(groups).sort((a, b) => groups[b].length - groups[a].length);
+
+      let html = `
+        <div class="text-center mb-3">
+          <span class="badge bg-primary bg-opacity-10 text-primary fs-5 px-4 py-2">
+            <i class="bi bi-people-fill me-1"></i>${opinions.length}人の<ruby>回答<rt>かいとう</rt></ruby>
+          </span>
+        </div>
+        <div class="d-flex flex-wrap gap-3 justify-content-center">`;
+
+      sortedTags.forEach((tag, idx) => {
+        const color = colors[idx % colors.length];
+        const count = groups[tag].length;
+        const pct = Math.round((count / opinions.length) * 100);
+        html += `<div class="text-center">
+          <div class="badge bg-${color} fs-4 px-4 py-3 d-block mb-1" style="min-width: 100px;">${tag}</div>
+          <div class="fw-bold fs-5">${count}<small class="text-muted">人</small></div>
+          <div class="text-muted small">${pct}%</div>
+        </div>`;
+      });
+
+      html += `</div>`;
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: QUADRANT (Left-Right)
+    // 大きな散布図 + 意見カード
+    // =========================================================
+    _fsQuadrantViz(container, opinions, opts) {
+      const xMin = opts.xAxisLabel?.[0] || '左';
+      const xMax = opts.xAxisLabel?.[1] || '右';
+      const yMin = opts.yAxisLabel?.[0] || '下';
+      const yMax = opts.yAxisLabel?.[1] || '上';
+
+      let html = `
+        <div class="w-100 px-3">
+          <div class="text-center mb-2">
+            <span class="badge bg-primary bg-opacity-10 text-primary fs-6 px-3 py-2">
+              <i class="bi bi-people-fill me-1"></i>${opinions.length}人の<ruby>回答<rt>かいとう</rt></ruby>
+            </span>
+          </div>
+          <div class="position-relative mx-auto" style="width: 100%; max-width: 450px; aspect-ratio: 1/1;">
+            <div class="w-100 h-100 bg-light border rounded position-relative" style="border-width: 2px !important;">
+              <div class="position-absolute top-50 start-0 w-100 border-top border-secondary" style="opacity: 0.4;"></div>
+              <div class="position-absolute start-50 top-0 h-100 border-start border-secondary" style="opacity: 0.4;"></div>
+              <span class="position-absolute top-50 start-0 translate-middle-y bg-white px-2 py-1 rounded border fw-bold" style="margin-left: 4px; font-size: 1rem;">${xMin}</span>
+              <span class="position-absolute top-50 end-0 translate-middle-y bg-white px-2 py-1 rounded border fw-bold" style="margin-right: 4px; font-size: 1rem;">${xMax}</span>
+              <span class="position-absolute top-0 start-50 translate-middle-x bg-white px-2 py-1 rounded border fw-bold" style="margin-top: 4px; font-size: 1rem;">${yMax}</span>
+              <span class="position-absolute bottom-0 start-50 translate-middle-x bg-white px-2 py-1 rounded border fw-bold" style="margin-bottom: 4px; font-size: 1rem;">${yMin}</span>`;
+
+      opinions.forEach((op, idx) => {
+        const val = this._parseValue(op.value);
+        if (val && typeof val === 'object') {
+          const left = ((Number(val.x) + 100) / 200) * 100;
+          const top = ((100 - Number(val.y)) / 200) * 100;
+          const hue = (idx * 37) % 360;
+          html += `<div class="position-absolute rounded-circle border border-2 border-white shadow"
+            style="width: 20px; height: 20px; left: ${left}%; top: ${top}%; transform: translate(-50%, -50%); background: hsl(${hue}, 70%, 55%); opacity: 0.85;"></div>`;
+        }
+      });
+
+      html += `</div></div></div>`;
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: RANKING (Top-Bottom)
+    // 集計ランキングバー（大）+ 意見カード
+    // =========================================================
+    _fsRankingViz(container, opinions, opts) {
+      const scores = {};
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && val.items) {
+          val.items.forEach((item, idx) => {
+            if (!scores[item]) scores[item] = 0;
+            scores[item] += Math.max(val.items.length - idx, 1);
+          });
+        }
+      });
+
+      const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+
+      let html = `
+        <div class="text-center mb-3">
+          <span class="badge bg-primary bg-opacity-10 text-primary fs-5 px-4 py-2">
+            <i class="bi bi-people-fill me-1"></i>${opinions.length}人の<ruby>回答<rt>かいとう</rt></ruby>を<ruby>集計<rt>しゅうけい</rt></ruby>
+          </span>
+        </div>`;
+
+      if (sorted.length > 0) {
+        const maxScore = sorted[0][1];
+        sorted.forEach(([item, score], idx) => {
+          const pct = Math.round((score / maxScore) * 100);
+          const medal = idx === 0 ? '<span style="font-size:1.5rem;">&#x1F947;</span>'
+            : idx === 1 ? '<span style="font-size:1.5rem;">&#x1F948;</span>'
+              : idx === 2 ? '<span style="font-size:1.5rem;">&#x1F949;</span>'
+                : `<span class="fs-5 fw-bold text-muted">${idx + 1}.</span>`;
+          const barColor = idx === 0 ? 'bg-warning' : idx === 1 ? 'bg-secondary' : idx === 2 ? 'bg-orange' : 'bg-primary bg-opacity-50';
+
+          html += `<div class="d-flex align-items-center mb-3">
+            <span class="me-3 text-center" style="min-width: 36px;">${medal}</span>
+            <div class="flex-grow-1">
+              <div class="d-flex justify-content-between mb-1">
+                <span class="fw-bold fs-5">${item}</span>
+                <span class="text-muted fs-6">${score}pt</span>
+              </div>
+              <div class="progress" style="height: 14px; border-radius: 8px;">
+                <div class="progress-bar ${idx < 3 ? 'bg-primary' : 'bg-primary bg-opacity-50'}" style="width: ${pct}%; border-radius: 8px;"></div>
+              </div>
+            </div>
+          </div>`;
+        });
+      }
+
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: CURVE (Top-Bottom)
+    // 重ね合わせ折れ線チャート（大）+ 意見カード
+    // =========================================================
+    _fsCurveViz(container, opinions, opts) {
+      const scenes = opts.scenes || ['はじめ', '展開', '山場', '結末'];
+      const canvasId = 'fs-curve-chart-' + Date.now();
+
+      container.innerHTML = `
+        <div class="text-center mb-3">
+          <span class="badge bg-primary bg-opacity-10 text-primary fs-5 px-4 py-2">
+            <i class="bi bi-people-fill me-1"></i>${opinions.length}人の<ruby>心情曲線<rt>しんじょうきょくせん</rt></ruby>
+          </span>
+        </div>
+        <div style="height: 280px;"><canvas id="${canvasId}"></canvas></div>`;
+
+      setTimeout(() => {
+        const ctx = document.getElementById(canvasId);
+        if (!ctx) return;
+
+        const datasets = [];
+        const avgData = new Array(scenes.length).fill(0);
+        let count = 0;
+
+        opinions.forEach((op, idx) => {
+          const val = this._parseValue(op.value);
+          if (val && val.data) {
+            const data = val.data.map(d => d.value);
+            data.forEach((v, i) => { if (i < avgData.length) avgData[i] += v; });
+            count++;
+            datasets.push({
+              data: data,
+              borderColor: `hsla(${(idx * 37) % 360}, 70%, 60%, 0.3)`,
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.3,
+              fill: false
+            });
+          }
+        });
+
+        if (count > 0) {
+          datasets.push({
+            label: 'みんなの平均',
+            data: avgData.map(v => Math.round(v / count)),
+            borderColor: 'rgb(220, 53, 69)',
+            borderWidth: 4,
+            pointRadius: 6,
+            pointBackgroundColor: 'rgb(220, 53, 69)',
+            tension: 0.3,
+            fill: false
+          });
+        }
+
+        new Chart(ctx, {
+          type: 'line',
+          data: { labels: scenes, datasets: datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: { min: 0, max: 100, ticks: { font: { size: 14 } } },
+              x: { ticks: { font: { size: 16, weight: 'bold' } } }
+            },
+            plugins: {
+              legend: { display: true, position: 'top', labels: { font: { size: 14 } } }
+            },
+            animation: false
+          }
+        });
+      }, 150);
+    }
+
+    // =========================================================
+    // FULLSCREEN: MANDALA (Left-Right)
+    // キーワードクラウド（大）+ 意見カード
+    // =========================================================
+    _fsMandalaViz(container, opinions, opts) {
+      const wordCounts = {};
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && val.items) {
+          val.items.filter(v => v && v.trim()).forEach(item => {
+            const word = item.trim();
+            wordCounts[word] = (wordCounts[word] || 0) + 1;
+          });
+        }
+      });
+
+      const sorted = Object.entries(wordCounts).sort((a, b) => b[1] - a[1]);
+      const maxCount = sorted.length > 0 ? sorted[0][1] : 1;
+
+      let html = `
+        <div class="w-100 px-3">
+          <div class="text-center mb-3">
+            <span class="badge bg-primary bg-opacity-10 text-primary fs-6 px-3 py-2">
+              <i class="bi bi-people-fill me-1"></i>${opinions.length}人のキーワード
+            </span>
+          </div>`;
+
+      if (opts.centerTheme) {
+        html += `<div class="text-center mb-3">
+          <span class="badge bg-primary fs-4 px-4 py-3">${opts.centerTheme}</span>
+        </div>`;
+      }
+
+      html += `<div class="d-flex flex-wrap gap-2 justify-content-center px-2">`;
+      sorted.slice(0, 25).forEach(([word, count]) => {
+        const ratio = count / maxCount;
+        const fontSize = ratio >= 0.8 ? '1.8rem' : ratio >= 0.5 ? '1.4rem' : ratio >= 0.3 ? '1.1rem' : '0.95rem';
+        const opacity = ratio >= 0.5 ? '1' : '0.85';
+        html += `<span class="badge bg-warning text-dark shadow-sm" style="font-size: ${fontSize}; padding: 8px 14px; opacity: ${opacity};">${word}<sup class="ms-1 text-muted">${count}</sup></span>`;
+      });
+      html += `</div></div>`;
+
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: ACTION (Top-Bottom, カードのみ)
+    // 宣言カードを大きく並べる
+    // =========================================================
+    _fsActionCards(container, opinions) {
+      let html = `
+        <div class="text-center mb-3">
+          <span class="badge bg-success bg-opacity-10 text-success fs-5 px-4 py-2">
+            <i class="bi bi-megaphone-fill me-1"></i>${opinions.length}人の<ruby>行動宣言<rt>こうどうせんげん</rt></ruby>
+          </span>
+        </div>
+        <div class="row g-3">`;
+
+      opinions.forEach(op => {
+        const val = this._parseValue(op.value);
+        if (val && typeof val === 'object') {
+          html += `<div class="col-md-6">
+            <div class="bg-white rounded-3 p-3 shadow-sm border-start border-4 border-success h-100">
+              <div class="fw-bold text-success mb-2 fs-6"><i class="bi bi-megaphone-fill me-1"></i><ruby>行動宣言<rt>こうどうせんげん</rt></ruby></div>
+              ${val.when ? `<div class="mb-1 fs-6"><span class="text-muted me-1"><i class="bi bi-clock"></i> いつ:</span>${val.when}</div>` : ''}
+              ${val.who ? `<div class="mb-1 fs-6"><span class="text-muted me-1"><i class="bi bi-person"></i> だれに:</span>${val.who}</div>` : ''}
+              ${val.what ? `<div class="fw-bold fs-5 mt-2 text-success"><i class="bi bi-check-circle me-1"></i>${val.what}</div>` : ''}
+              ${op.text ? `<div class="small text-muted mt-2 pt-2 border-top">${op.text}</div>` : ''}
+            </div>
+          </div>`;
+        }
+      });
+
+      html += `</div>`;
+      container.innerHTML = html;
+    }
+
+    // =========================================================
+    // FULLSCREEN: 共通テキスト意見カードリスト
+    // =========================================================
+    _fsTextCards(container, opinions, patternType) {
+      const withText = opinions.filter(op => op.text && op.text.trim());
+
+      let headerHtml = `<div class="d-flex justify-content-between align-items-center mb-3 mt-2">
+        <h6 class="fw-bold text-muted mb-0 fs-5"><i class="bi bi-chat-left-text me-2"></i>みんなの<ruby>意見<rt>いけん</rt></ruby></h6>
+        <span class="badge bg-light text-dark border">${withText.length}<small>件</small></span>
+      </div>`;
+
+      if (withText.length === 0) {
+        container.innerHTML = headerHtml + '<div class="text-center text-muted fs-6 py-3">テキストの意見はまだありません</div>';
+        return;
+      }
+
+      let html = headerHtml;
+      withText.forEach(op => {
+        const badge = this._fsBadge(op, patternType);
+        html += `<div class="fs-opinion-card">
+          <div class="mb-1">${badge}</div>
+          <div class="fs-opinion-text">${op.text}</div>
+        </div>`;
+      });
+
+      container.innerHTML = html;
+    }
+
+    // バッジ生成（フルスクリーン用）
+    _fsBadge(op, patternType) {
+      const val = this._parseValue(op.value);
+
+      switch (patternType) {
+        case 'SLIDER':
+          return `<span class="badge bg-primary rounded-pill fs-6 me-1">${op.value}</span>`;
+        case 'TAGS':
+          return `<span class="badge bg-info text-dark fs-6 me-1">${op.value}</span>`;
+        case 'QUADRANT':
+          return val && typeof val === 'object'
+            ? `<span class="badge bg-secondary fs-6 me-1">x:${val.x} y:${val.y}</span>` : '';
+        case 'RANKING':
+          return val?.items?.[0]
+            ? `<span class="badge bg-primary fs-6 me-1">1<ruby>位<rt>い</rt></ruby>: ${val.items[0]}</span>` : '';
+        case 'CURVE':
+          return `<span class="badge bg-secondary fs-6 me-1"><ruby>心情曲線<rt>しんじょうきょくせん</rt></ruby></span>`;
+        case 'MANDALA': {
+          const preview = val?.items?.filter(v => v).slice(0, 2).join(', ') || '';
+          return preview ? `<span class="badge bg-warning text-dark fs-6 me-1">${preview}...</span>` : '';
+        }
+        default:
+          return `<span class="badge bg-secondary fs-6 me-1">${op.value}</span>`;
+      }
+    }
   }
 
   // グローバルインスタンス
