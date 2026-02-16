@@ -138,12 +138,18 @@
         </div>
       </div>
 
-      <!-- Overlays (Color Match & AI) -->
-      <div id="color-match-card" class="card shadow-sm d-none mb-3">
-        <div class="card-body text-center p-4" id="color-match-bg" style="transition: background 0.5s;">
-          <h4 class="fw-bold"><ruby>対話<rt>たいわ</rt></ruby>モード</h4>
-          <p class="fs-5"><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと
-              </rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+      <!-- Dialogue Mode Color Beacon -->
+      <div id="dialogue-mode-card" class="d-none mt-3">
+        <div class="dialogue-beacon" id="dialogue-beacon" onclick="toggleDialogueFullscreen()">
+          <div class="dialogue-label-area">
+            <div class="dialogue-icon"><i class="bi bi-chat-heart-fill"></i></div>
+            <h3><ruby>対話<rt>たいわ</rt></ruby>モード</h3>
+            <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+            <div id="dialogue-value-display"></div>
+          </div>
+          <div class="dialogue-expand-hint">
+            <i class="bi bi-arrows-fullscreen"></i> タップで<ruby>大<rt>おお</rt></ruby>きくする
+          </div>
         </div>
       </div>
 
@@ -587,6 +593,21 @@
     </div>
 
 
+  </div>
+
+  <!-- Dialogue Mode Fullscreen Overlay -->
+  <div id="dialogue-fullscreen" class="d-none">
+    <div class="dialogue-fs-beacon" id="dialogue-fs-beacon">
+      <div class="dialogue-fs-content">
+        <div class="dialogue-fs-icon"><i class="bi bi-chat-heart-fill"></i></div>
+        <h1><ruby>対話<rt>たいわ</rt></ruby>モード</h1>
+        <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+        <div id="dialogue-fs-value" class="mt-3"></div>
+      </div>
+      <button class="dialogue-fs-close" onclick="closeDialogueFullscreen()">
+        <i class="bi bi-x-lg me-1"></i><ruby>閉<rt>と</rt></ruby>じる
+      </button>
+    </div>
   </div>
 
   <!-- Fullscreen Opinion Overlay (outside container) -->

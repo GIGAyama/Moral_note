@@ -162,6 +162,169 @@
     if (overlay) overlay.classList.add('d-none');
   }
 
+  /**
+   * Dialogue Mode (対話モード)
+   * 全パターン対応: 回答に基づいた色で画面を染め、教室内で色の違う友達を探せるようにする
+   */
+  function getDialogueColor(patternType, value, options) {
+    let opts = {};
+    try {
+      opts = typeof options === 'string' ? JSON.parse(options) : (options || {});
+    } catch (e) { }
+
+    switch (patternType) {
+      case 'SLIDER': {
+        // 0=青(210°), 50=緑(105°), 100=赤(0°) の連続グラデーション
+        const v = Number(value) || 50;
+        const hue = 210 - (v / 100) * 210;
+        return `hsl(${hue}, 80%, 48%)`;
+      }
+      case 'TAGS': {
+        // タグごとに鮮やかな固定色
+        const tagColors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22'];
+        const tags = opts.tags || [];
+        const idx = tags.indexOf(String(value));
+        return tagColors[idx >= 0 ? idx % tagColors.length : Math.abs(String(value).split('').reduce((h, c) => ((h << 5) - h) + c.charCodeAt(0), 0)) % tagColors.length];
+      }
+      case 'QUADRANT': {
+        // 4象限で明確に異なる色（位置の強さで彩度変化）
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const x = Number(val?.x) || 0;
+        const y = Number(val?.y) || 0;
+        const dist = Math.min(Math.sqrt(x * x + y * y) / 100, 1);
+        const sat = 55 + dist * 35;
+        if (x >= 0 && y >= 0) return `hsl(350, ${sat}%, 50%)`; // 右上: 赤
+        if (x < 0 && y >= 0) return `hsl(210, ${sat}%, 48%)`;  // 左上: 青
+        if (x < 0 && y < 0) return `hsl(145, ${sat}%, 42%)`;   // 左下: 緑
+        return `hsl(40, ${sat}%, 50%)`;                          // 右下: 橙
+      }
+      case 'RANKING': {
+        // 1位に選んだ項目ごとに固定色
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const top = val?.items?.[0] || '';
+        const items = opts.items || [];
+        const idx = items.indexOf(top);
+        const rankColors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
+        return rankColors[idx >= 0 ? idx % rankColors.length : 0];
+      }
+      case 'CURVE': {
+        // 曲線全体の平均値でグラデーション（低=青, 高=赤）
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        if (val?.data && val.data.length > 0) {
+          const avg = val.data.reduce((s, d) => s + d.value, 0) / val.data.length;
+          const hue = 210 - (avg / 100) * 210;
+          return `hsl(${hue}, 80%, 48%)`;
+        }
+        return '#6c757d';
+      }
+      case 'MANDALA': {
+        // 埋めた数でグラデーション（少ない=青, 多い=赤）
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const count = val?.items ? val.items.filter(v => v && v.trim()).length : 0;
+        const hue = 210 - (count / 8) * 210;
+        return `hsl(${hue}, 75%, 48%)`;
+      }
+      case 'ACTION': {
+        return '#27ae60';
+      }
+      default:
+        return '#6c757d';
+    }
+  }
+
+  function getDialogueLabel(patternType, value, options) {
+    let opts = {};
+    try {
+      opts = typeof options === 'string' ? JSON.parse(options) : (options || {});
+    } catch (e) { }
+
+    const badge = (text) => `<span class="badge bg-white bg-opacity-25 fs-4 px-4 py-2 shadow-sm">${text}</span>`;
+
+    switch (patternType) {
+      case 'SLIDER': {
+        const v = Number(value) || 50;
+        const minL = opts.minLabel || 'A';
+        const maxL = opts.maxLabel || 'B';
+        return badge(`${v} / 100`) + `<div class="mt-2 small" style="opacity:0.8;">${minL} ← → ${maxL}</div>`;
+      }
+      case 'TAGS':
+        return badge(value);
+      case 'QUADRANT': {
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const xL = opts.xAxisLabel || ['左', '右'];
+        const yL = opts.yAxisLabel || ['下', '上'];
+        const x = val?.x || 0;
+        const y = val?.y || 0;
+        const xDir = x >= 0 ? xL[1] : xL[0];
+        const yDir = y >= 0 ? yL[1] : yL[0];
+        return badge(`${yDir}・${xDir}`);
+      }
+      case 'RANKING': {
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const top = val?.items?.[0] || '-';
+        return badge(`1位: ${top}`);
+      }
+      case 'CURVE':
+        return badge('心情曲線');
+      case 'MANDALA': {
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        const count = val?.items ? val.items.filter(v => v && v.trim()).length : 0;
+        return badge(`${count}個のキーワード`);
+      }
+      case 'ACTION': {
+        let val = value;
+        try { if (typeof val === 'string') val = JSON.parse(val); } catch (e) { }
+        return badge(val?.what || '行動宣言');
+      }
+      default:
+        return badge(String(value));
+    }
+  }
+
+  function showDialogueMode(value) {
+    if (!currentSession) return;
+
+    const color = getDialogueColor(currentSession.inputType, value, currentSession.options);
+    const label = getDialogueLabel(currentSession.inputType, value, currentSession.options);
+
+    const card = document.getElementById('dialogue-mode-card');
+    const beacon = document.getElementById('dialogue-beacon');
+    const valueDisplay = document.getElementById('dialogue-value-display');
+
+    if (card) {
+      card.classList.remove('d-none');
+      card.dataset.color = color;
+      card.dataset.label = label;
+    }
+    if (beacon) beacon.style.background = color;
+    if (valueDisplay) valueDisplay.innerHTML = label;
+  }
+
+  function toggleDialogueFullscreen() {
+    const card = document.getElementById('dialogue-mode-card');
+    const fsOverlay = document.getElementById('dialogue-fullscreen');
+    const fsBeacon = document.getElementById('dialogue-fs-beacon');
+    const fsValue = document.getElementById('dialogue-fs-value');
+
+    if (!card || !fsOverlay) return;
+
+    fsBeacon.style.background = card.dataset.color || '#6c757d';
+    if (fsValue) fsValue.innerHTML = card.dataset.label || '';
+    fsOverlay.classList.remove('d-none');
+  }
+
+  function closeDialogueFullscreen() {
+    const fsOverlay = document.getElementById('dialogue-fullscreen');
+    if (fsOverlay) fsOverlay.classList.add('d-none');
+  }
+
   function loadClassOpinionsFullscreen() {
     if (!currentSession) return;
 
@@ -229,10 +392,8 @@
           showConfirmButton: false
         });
 
-        if (currentSession.inputType === 'SLIDER') {
-          const card = document.getElementById('color-match-card');
-          if (card) card.classList.remove('d-none');
-        }
+        // 全パターン対応: 対話モード表示
+        showDialogueMode(val);
 
         // 送信後: みんなの考えボタンを表示
         const btnOpinion = document.getElementById('btn-opinion-share');
@@ -635,8 +796,9 @@
 
             updatePhaseButtons && updatePhaseButtons(serverPhase); // もし関数があれば
 
-            // フルスクリーン意見表示を閉じる
+            // フルスクリーン表示を閉じる
             closeOpinionFullscreen();
+            closeDialogueFullscreen();
 
             if (serverPhase === 'AFTER') {
               showReflectionView();
