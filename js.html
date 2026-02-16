@@ -1,24 +1,28 @@
 <script>
   /**
-   * Global State
+   * =================================================================
+   * 1. グローバル変数・状態管理 (GLOBAL STATE)
+   * =================================================================
    */
   let currentUser = null;
   let currentSession = null;
-  let currentPhase = 'BEFORE'; // BEFORE, MIDDLE, AFTER
-  let scatterChart = null;
-  let sliderColor = '#1a73e8';
-  let loadingTimeout = null;
-  let selectedTag = '';
-  let isPageVisible = true; // タブ表示状態
+  let currentPhase = 'BEFORE'; // 授業フェーズ: BEFORE(導入), AFTER(展開/まとめ)
+  let scatterChart = null;     // 教師用: 散布図チャートインスタンス
+  let sliderColor = '#1a73e8'; // スライダーの色
+  let loadingTimeout = null;   // 読み込み監視用タイマー
+  let selectedTag = '';        // 選択された感情タグ
+  let isPageVisible = true;    // ブラウザタブの表示状態（ポーリング制御用）
 
-  // Drive Picker State
+  // Google Drive Picker State
   let pickerModal = null;
   let currentPickerFolderId = null;
   let parentPickerFolderId = null;
 
 
   /**
-   * Initialization
+   * =================================================================
+   * 2. アプリ初期化・ライフサイクル (INITIALIZATION)
+   * =================================================================
    */
   document.addEventListener('visibilitychange', () => {
     isPageVisible = !document.hidden;
@@ -73,6 +77,11 @@
     }
   }
 
+  /**
+   * =================================================================
+   * 4. 生徒用機能 (STUDENT FUNCTIONS)
+   * =================================================================
+   */
   function login() {
     const select = document.getElementById('student-select');
     const uid = select.value;
@@ -333,6 +342,11 @@
     document.getElementById('session-opts-tags').classList.toggle('d-none', type !== 'TAGS');
   }
 
+  /**
+   * =================================================================
+   * 3. 授業管理 (TEACHER SESSION CONTROL)
+   * =================================================================
+   */
   function createNewSession() {
     const title = document.getElementById('new-session-title').value;
     if (!title) { Swal.fire('タイトルを入れてね', '', 'warning'); return; }
@@ -1069,7 +1083,7 @@
           const typeLabel = u.inputType === 'SLIDER' ? '<span class="badge bg-info text-dark">スライダー</span>' : '<span class="badge bg-warning text-dark">感情タグ</span>';
           const dateStr = new Date(u.createdAt).toLocaleDateString();
 
-          return `<a href="#" class="list-group-item list-group-item-action" onclick="editUnit('${u.unitId}'); return false;">
+          return `<div class="list-group-item list-group-item-action" onclick="editUnit('${u.unitId}')" style="cursor: pointer;">
           <div class="d-flex w-100 justify-content-between">
             <h6 class="mb-1 fw-bold text-primary">${u.title}</h6>
             <small class="text-muted">${dateStr}</small>
@@ -1079,60 +1093,80 @@
             <button class="btn btn-sm btn-outline-danger me-1" onclick="deleteUnit(event, '${u.unitId}')">削除</button>
             <button class="btn btn-sm btn-success" onclick="startUnit(event, '${u.unitId}')">この単元で開始</button>
           </div>
-        </a>`;
+        </div>`;
         }).join('');
       })
       .catch(showError);
   }
 
   function importUnitFromPdf() {
-    const input = document.getElementById('pdf-file-id');
-    let val = input.value.trim();
-    if (!val) {
-      Swal.fire('ファイルIDまたはURLを入力してください', '', 'warning');
+    const fileInput = document.getElementById('pdf-file-input');
+    if (fileInput.files.length === 0) {
+      Swal.fire('PDFファイルを選択してください', '', 'warning');
       return;
     }
 
-    // URLならID抽出 (簡易版)
-    const match = val.match(/[-\w]{25,}/);
-    if (match) val = match[0];
+    const file = fileInput.files[0];
+    if (file.type !== 'application/pdf') {
+      Swal.fire('PDFファイルのみ対応しています', '', 'error');
+      return;
+    }
 
-    Swal.fire({
-      title: 'AI解析中...',
-      text: 'PDFから授業設定を読み取っています',
-      didOpen: () => Swal.showLoading()
-    });
+    // ファイルサイズチェック (例: 5MB以下)
+    if (file.size > 5 * 1024 * 1024) {
+      Swal.fire('ファイルサイズが大きすぎます (5MB以下)', '', 'error');
+      return;
+    }
 
-    runGoogleScript('parseLessonPdf', val)
-      .then(result => {
-        if (result && result.success && result.data) {
-          Swal.close();
-          // フォームに反映
-          const d = result.data;
-          document.getElementById('edit-unit-id').value = ''; // 新規扱い
-          document.getElementById('edit-unit-title').value = d.title || '';
-          document.getElementById('edit-unit-type').value = d.inputType || 'SLIDER';
-          document.getElementById('edit-unit-memo').value = d.memo || '';
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const base64 = e.target.result.split(',')[1]; // data:application/pdf;base64,.....
 
-          toggleUnitEditOptions();
+      Swal.fire({
+        title: 'AI解析中...',
+        text: 'PDFから授業設定を読み取っています',
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+      });
 
-          if (d.inputType === 'SLIDER' && d.options) {
-            document.getElementById('edit-unit-min').value = d.options.minLabel || '';
-            document.getElementById('edit-unit-max').value = d.options.maxLabel || '';
-          } else if (d.inputType === 'TAGS' && d.options && d.options.tags) {
-            document.getElementById('edit-unit-tags').value = d.options.tags.join(',');
+      runGoogleScript('parseLessonPdf', base64)
+        .then(result => {
+          if (result && result.success && result.data) {
+            Swal.close();
+            // フォームに反映
+            const d = result.data;
+
+            // Case 1: Multiple Units (Bulk)
+            if (d.units && Array.isArray(d.units) && d.units.length > 0) {
+              showBulkImportModal(d.units);
+              fileInput.value = '';
+              return;
+            }
+
+            // Case 2: Single Unit (Fallback)
+            const unit = (d.units && d.units.length === 1) ? d.units[0] : d;
+            fillUnitForm(unit);
+
+            Swal.fire({
+              icon: 'success',
+              title: '読み取り成功',
+              text: '内容を確認・修正して「保存する」を押してください'
+            });
+
+            // ファイル選択リセット
+            fileInput.value = '';
+          } else {
+            throw new Error(result.error || '解析に失敗しました');
           }
+        })
+        .catch(showError);
+    };
 
-          Swal.fire({
-            icon: 'success',
-            title: '読み取り成功',
-            text: '内容を確認・修正して「保存する」を押してください'
-          });
-        } else {
-          throw new Error(result.error || '解析に失敗しました');
-        }
-      })
-      .catch(showError);
+    reader.onerror = function () {
+      Swal.fire('ファイルの読み込みに失敗しました', '', 'error');
+    };
+
+    reader.readAsDataURL(file);
   }
 
   function toggleUnitEditOptions() {
@@ -1216,6 +1250,7 @@
 
   function deleteUnit(event, unitId) {
     event.stopPropagation();
+    event.preventDefault();
     if (!confirm('本当に削除しますか？')) return;
 
     runGoogleScript('deleteUnit', unitId)
@@ -1225,6 +1260,7 @@
 
   function startUnit(event, unitId) {
     event.stopPropagation();
+    event.preventDefault();
     Swal.fire({
       title: 'この単元で授業を始めますか？',
       text: '現在進行中の授業は終了されます',
@@ -1251,8 +1287,19 @@
   }
 
   /**
-   * GAS Wrapper (GIGA Standard)
+   * =================================================================
+   * 6. GAS連携・ユーティリティ (GAS WRAPPER & UTILS)
+   * =================================================================
    */
+  function showError(err) {
+    console.error(err);
+    Swal.fire({
+      icon: 'error',
+      title: 'エラーが発生しました',
+      text: err.toString()
+    });
+  }
+
   function runGoogleScript(funcName, ...args) {
     return new Promise((resolve, reject) => {
       google.script.run
@@ -1421,86 +1468,102 @@
       });
   }
 
-  function showError(err) {
-    console.error(err);
-    Swal.fire({
-      icon: 'error',
-      title: 'エラー',
-      text: '通信に失敗しました: ' + err.toString()
-    });
-  }
 
-  /**
-   * Drive Picker Functions
-   */
-  function openDrivePicker() {
-    if (!pickerModal) {
-      pickerModal = new bootstrap.Modal(document.getElementById('drivePickerModal'));
+
+  // ==========================================
+  // Bulk Import Functions
+  // ==========================================
+
+  function fillUnitForm(d) {
+    document.getElementById('edit-unit-id').value = ''; // 新規扱い
+    document.getElementById('edit-unit-title').value = d.title || '';
+    document.getElementById('edit-unit-type').value = d.inputType || 'SLIDER';
+    document.getElementById('edit-unit-memo').value = d.memo || '';
+
+    toggleUnitEditOptions();
+
+    if (d.inputType === 'SLIDER' && d.options) {
+      document.getElementById('edit-unit-min').value = d.options.minLabel || '';
+      document.getElementById('edit-unit-max').value = d.options.maxLabel || '';
+    } else if (d.inputType === 'TAGS' && d.options && d.options.tags) {
+      document.getElementById('edit-unit-tags').value = Array.isArray(d.options.tags) ? d.options.tags.join(',') : d.options.tags;
     }
-    pickerModal.show();
-    loadDriveItems(null); // Load root
   }
 
-  function loadDriveItems(folderId) {
-    const list = document.getElementById('picker-list');
-    list.innerHTML = '<div class="text-center py-5"><div class="spinner-border spinner-border-sm text-secondary"></div> 読み込み中...</div>';
+  let bulkUnitsCache = [];
 
-    runGoogleScript('getDriveFiles', folderId)
-      .then(result => {
-        if (result.success) {
-          currentPickerFolderId = result.currentFolderId;
-          parentPickerFolderId = result.parentFolderId;
-          document.getElementById('picker-path').innerText = result.currentFolderName;
-          document.getElementById('picker-up-btn').disabled = !result.parentFolderId;
-          renderDriveItems(result.items);
-        } else {
-          list.innerHTML = `<div class="p-3 text-danger">エラー: ${result.error}</div>`;
-        }
-      })
-      .catch(err => {
-        list.innerHTML = `<div class="p-3 text-danger">通信エラー: ${err}</div>`;
-      });
+  function showBulkImportModal(units) {
+    bulkUnitsCache = units;
+    const list = document.getElementById('bulk-import-list');
+    list.innerHTML = '';
+
+    units.forEach((u, idx) => {
+      const isChecked = true;
+      const typeLabel = u.inputType === 'SLIDER' ? '<span class="badge bg-primary">スライダー</span>' : '<span class="badge bg-success">感情タグ</span>';
+
+      const html = `
+      <label class="list-group-item d-flex gap-2">
+        <input class="form-check-input flex-shrink-0" type="checkbox" value="${idx}" ${isChecked ? 'checked' : ''} style="transform: scale(1.3); margin-top: 0.3em;">
+        <div class="flex-grow-1 ms-2">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <h6 class="mb-0 fw-bold">${u.title || '（タイトルなし）'}</h6>
+            ${typeLabel}
+          </div>
+          <small class="text-muted text-truncate d-block" style="max-width: 100%;">${u.memo || ''}</small>
+        </div>
+      </label>
+    `;
+      list.innerHTML += html;
+    });
+
+    const modal = new bootstrap.Modal(document.getElementById('bulkImportModal'));
+    modal.show();
   }
 
-  function renderDriveItems(items) {
-    const list = document.getElementById('picker-list');
-    if (!items || items.length === 0) {
-      list.innerHTML = '<div class="p-3 text-muted text-center">フォルダは空です</div>';
+  function saveBulkUnits() {
+    const checkboxes = document.querySelectorAll('#bulk-import-list input[type="checkbox"]:checked');
+    if (checkboxes.length === 0) {
+      Swal.fire('登録する単元を選択してください', '', 'warning');
       return;
     }
 
-    list.innerHTML = items.map(item => {
-      const icon = item.type === 'folder'
-        ? '<i class="bi bi-folder-fill text-warning fs-5"></i>'
-        : '<i class="bi bi-file-earmark-pdf-fill text-danger fs-5"></i>';
+    const selectedUnits = Array.from(checkboxes).map(cb => bulkUnitsCache[parseInt(cb.value)]);
+    const modal = bootstrap.Modal.getInstance(document.getElementById('bulkImportModal'));
+    modal.hide();
 
-      const action = item.type === 'folder'
-        ? `onclick="loadDriveItems('${item.id}')"`
-        : `onclick="selectDriveItem('${item.id}', '${item.name}')"`;
+    Swal.fire({
+      title: '一括登録中...',
+      text: `${selectedUnits.length}件の単元を登録しています`,
+      allowOutsideClick: false,
+      didOpen: () => Swal.showLoading()
+    });
 
-      const cursor = 'cursor: pointer;';
-      const bgHover = 'list-group-item-action';
-
-      return `
-        <div class="list-group-item ${bgHover} d-flex align-items-center py-2" ${action} style="${cursor}">
-          <div class="me-3">${icon}</div>
-          <div class="flex-grow-1 text-truncate">
-            ${item.name}
-          </div>
-          ${item.type === 'file' ? '<button class="btn btn-sm btn-outline-primary">選択</button>' : '<i class="bi bi-chevron-right text-muted"></i>'}
-        </div>
-      `;
-    }).join('');
+    saveNextUnit(selectedUnits, 0);
   }
 
-  function goUpDriveFolder() {
-    if (parentPickerFolderId) {
-      loadDriveItems(parentPickerFolderId);
+  function saveNextUnit(units, index) {
+    if (index >= units.length) {
+      Swal.fire({ icon: 'success', title: '完了', text: `${units.length}件を登録しました` });
+      loadUnits();
+      return;
     }
-  }
 
-  function selectDriveItem(id, name) {
-    document.getElementById('pdf-file-id').value = id;
-    if (pickerModal) pickerModal.hide();
+    const u = units[index];
+    const payload = {
+      unitId: '',
+      title: u.title,
+      inputType: u.inputType,
+      options: u.options,
+      memo: u.memo
+    };
+
+    runGoogleScript('saveUnit', payload)
+      .then(() => {
+        saveNextUnit(units, index + 1);
+      })
+      .catch(err => {
+        console.error(err);
+        Swal.fire('エラー', `${index + 1}件目の登録に失敗しました: ${u.title}`, 'error');
+      });
   }
 </script>

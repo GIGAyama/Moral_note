@@ -1,23 +1,33 @@
 /**
- * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v2.0)
+ * ココロの羅針盤 - Standalone & Auto-Recovery Edition (v2.4)
  * GIGA Standard v2 Compliant
+ * 
+ * 【教員向け解説】
+ * このスクリプトは、Googleスプレッドシートをデータベースとして利用し、
+ * 授業の進行、生徒の意見集約、AI分析を行うためのバックエンドプログラムです。
  */
 
-// 定数定義
+// =================================================================
+// 1. 定数・設定 (CONSTANTS)
+// =================================================================
 const APP_NAME = "こころスコープ";
 const DB_FILE_NAME = "こころスコープ_Data";
 const SCRIPT_PROP = PropertiesService.getScriptProperties();
 
-// Gemini API設定 (オプション)
+// Gemini API設定 (APIキーは「先生用ダッシュボード」の設定画面から入力します)
 const GEMINI_API_KEY = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
 
-// 認証設定
+// 認証設定 (デフォルトパスワード)
 const DEFAULT_TEACHER_PASSWORD = "admin";
 
-/* ==============================================
-   Core Functions
-   ============================================== */
+// =================================================================
+// 2. コア機能 (CORE FUNCTIONS)
+// =================================================================
 
+/**
+ * Webアプリとしてのアクセスポイント (GETリクエスト処理)
+ * index.html を表示します。
+ */
 function doGet(e) {
   const template = HtmlService.createTemplateFromFile('index');
   return template.evaluate()
@@ -26,17 +36,22 @@ function doGet(e) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+/**
+ * HTMLファイル内で別のファイルを読み込むための関数
+ * js.html や css.html をインクルードするのに使用します。
+ */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
-/* ==============================================
-   Database Management (Auto-Setup & Recovery)
-   ============================================== */
+// =================================================================
+// 3. データベース管理 (DATABASE MANAGEMENT)
+// =================================================================
 
 /**
- * データベース(SS)を取得する。
- * DriveAppを使わず、try-catchのみで存在確認を行う。
+ * データベース(スプレッドシート)を取得します。
+ * IDが存在しない場合やファイルが見つからない場合は、自動的に新規作成・修復を試みます。
+ * @return {Spreadsheet} スプレッドシートオブジェクト
  */
 function getDB() {
   const dbId = SCRIPT_PROP.getProperty('DB_ID');
@@ -70,7 +85,7 @@ function getDB() {
 }
 
 /**
- * 新規スプレッドシート作成とシート構築
+ * 新規にデータベース用スプレッドシートを作成し、初期設定を行います。
  */
 function createDB() {
   const ss = SpreadsheetApp.create(DB_FILE_NAME);
@@ -86,7 +101,8 @@ function createDB() {
 }
 
 /**
- * シート構造の定義と適用
+ * スプレッドシートのシート構造を定義・適用します。
+ * 必要なシートがない場合は自動作成します。
  */
 function setupSheets(ss) {
   // 1. 設定シート
@@ -146,13 +162,13 @@ function setupSheets(ss) {
   }
 }
 
-/* ==============================================
-   Data Access Functions (Public API)
-   ============================================== */
+// =================================================================
+// 4. データアクセス・API (DATA ACCESS)
+// =================================================================
 
 /**
- * 初期データ取得 (クライアントから最初に呼ばれる)
- * 日付型を文字列に変換して安全に返す。
+ * アプリ起動時の初期データを取得します。
+ * 名簿と現在アクティブな授業情報を返します。
  */
 function getInitialData() {
   try {
@@ -163,7 +179,7 @@ function getInitialData() {
     let users = [];
     if (userSheet && userSheet.getLastRow() > 1) {
       users = userSheet.getDataRange().getValues().slice(1)
-        .filter(r => !r[3]) // deletedAt
+        .filter(r => !r[3]) // deletedAtがないもの
         .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
     }
 
@@ -174,13 +190,13 @@ function getInitialData() {
       const sessions = sessionSheet.getDataRange().getValues().slice(1)
         .filter(r => r[5] === 'ACTIVE' && !r[7])
         .map(r => {
-           // JSONパースの安全策
            let opts = {};
            try { opts = r[4] ? JSON.parse(r[4]) : {}; } catch(e) { console.warn('JSON Parse Error', e); }
 
+           // 日付は文字列に変換して返す（GASのDateオブジェクト対策）
            return {
              id: r[0],
-             date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]), // 日付を文字列化(重要)
+             date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]),
              title: r[2],
              inputType: r[3],
              options: opts,
@@ -199,8 +215,8 @@ function getInitialData() {
 }
 
 /**
- * ポーリング用軽量データ取得 (CacheService使用)
- * 生徒端末からの頻繁なアクセスに耐えるよう最適化
+ * 生徒端末からの定期的な状態確認（ポーリング）用関数
+ * CacheServiceを使用してスプレッドシートへのアクセスを減らし、高速に応答します。
  */
 function getPollingData() {
   const cache = CacheService.getScriptCache();
@@ -223,7 +239,7 @@ function getPollingData() {
       const r = sessions[0];
       data.activeSession = {
         id: r[0],
-        // statusとphaseのみ返す（軽量化）
+        // statusとphaseのみ返す（通信量削減）
         status: r[5],
         phase: r[6] || 'BEFORE'
       };
@@ -236,16 +252,154 @@ function getPollingData() {
 }
 
 /**
- * 教師用パスワード確認
+ * 授業の進行フェーズを変更します（教師用）
+ * @param {string} sessionId - 授業ID
+ * @param {string} newPhase - BEFORE, AFTER, CLOSED
  */
-function checkTeacherPassword(password) {
-  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
-  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
-  return { success: (password === correctPass) };
+function updateSessionPhase(sessionId, newPhase) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
+      sheet.getRange(i + 1, 7).setValue(newPhase);
+      // キャッシュを破棄して即座に反映
+      CacheService.getScriptCache().remove('POLLING_DATA');
+      return { success: true, phase: newPhase };
+    }
+  }
+  return { success: false, error: 'セッションが見つかりません' };
 }
 
 /**
- * ログ送信
+ * 授業を終了します（ACTIVEステータスをCLOSEDに変更）
+ */
+function closeSession(sessionId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
+      sheet.getRange(i + 1, 6).setValue('CLOSED');
+      CacheService.getScriptCache().remove('POLLING_DATA');
+      return { success: true };
+    }
+  }
+  return { success: false, error: 'セッションが見つかりません' };
+}
+
+/**
+ * 新規授業を作成します
+ * @param {string} title - 授業名
+ * @param {string} inputType - SLIDER or TAGS
+ * @param {string} optionsJson - 設定オプションのJSON文字列
+ */
+function createSession(title, inputType, optionsJson) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('授業');
+  
+  // 既存のアクティブな授業があれば自動的に終了させる
+  const data = sheet.getDataRange().getValues();
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][5] === 'ACTIVE') {
+      sheet.getRange(i + 1, 6).setValue('CLOSED');
+      CacheService.getScriptCache().remove('POLLING_DATA');
+    }
+  }
+  
+  const sessionId = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+  sheet.appendRow([
+    sessionId,
+    new Date(),
+    title,
+    inputType,
+    optionsJson,
+    'ACTIVE',
+    'BEFORE',
+    ''
+  ]);
+  
+  return { success: true };
+}
+
+// =================================================================
+// 5. 生徒管理 (STUDENT MANAGEMENT)
+// =================================================================
+
+/**
+ * 名簿に生徒を1名追加します
+ */
+function addStudent(name, ruby) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
+  sheet.appendRow([studentId, name, ruby, '']);
+  return { success: true, id: studentId };
+}
+
+/**
+ * 名簿に生徒を一括追加します（CSV/Excel形式の貼り付け対応）
+ * @param {Array} students - {name, ruby} の配列
+ */
+function addStudentBulk(students) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  if (!sheet) return { success: false, error: '名簿シートが見つかりません' };
+  
+  const rows = students.map((s, i) => {
+    // ユニークID生成 (タイムスタンプ + インデックスで重複回避)
+    const suffix = ('000' + i).slice(-3);
+    const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss') + suffix;
+    return [studentId, s.name, s.ruby, ''];
+  });
+  
+  if (rows.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  }
+  
+  return { success: true, count: rows.length };
+}
+
+/**
+ * 名簿から生徒を削除します（物理削除ではなく、削除日時を入れる論理削除）
+ */
+function deleteStudent(studentId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === studentId) {
+      sheet.getRange(i + 1, 4).setValue(new Date());
+      return { success: true };
+    }
+  }
+  return { success: false, error: '生徒が見つかりません' };
+}
+
+/**
+ * 名簿リストを取得します
+ */
+function getStudents() {
+  const ss = getDB();
+  const userSheet = ss.getSheetByName('名簿');
+  if (!userSheet || userSheet.getLastRow() <= 1) return { success: true, users: [] };
+
+  const users = userSheet.getDataRange().getValues().slice(1)
+    .filter(r => !r[3]) // deletedAt
+    .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
+    
+  return { success: true, users: users };
+}
+
+// =================================================================
+// 6. ログ・分析 (LOGGING & ANALYTICS)
+// =================================================================
+
+/**
+ * 生徒からの回答ログを保存します
  */
 function submitLog(data) {
   const ss = getDB();
@@ -268,7 +422,7 @@ function submitLog(data) {
 }
 
 /**
- * 授業ログ取得
+ * 教師用ダッシュボード向けの授業ログ取得（散布図表示用）
  */
 function getSessionLogs(sessionId) {
   const ss = getDB();
@@ -290,91 +444,124 @@ function getSessionLogs(sessionId) {
 }
 
 /**
- * 名簿取得 (一覧のみ)
+ * 特定生徒の過去の授業ログを含めたポートフォリオデータを取得します
  */
-function getStudents() {
+function getStudentPortfolio(studentId) {
   const ss = getDB();
-  const userSheet = ss.getSheetByName('名簿');
-  if (!userSheet || userSheet.getLastRow() <= 1) return { success: true, users: [] };
+  
+  // 1. 全授業取得
+  const sessionSheet = ss.getSheetByName('授業');
+  if (!sessionSheet) return [];
+  const sessions = sessionSheet.getDataRange().getValues().slice(1)
+    .filter(r => !r[7]) // deletedAt
+    .map(r => ({
+      id: r[0],
+      date: r[1],
+      title: r[2],
+      inputType: r[3],
+      options: r[4] ? JSON.parse(r[4]) : {}
+    }));
 
-  const users = userSheet.getDataRange().getValues().slice(1)
-    .filter(r => !r[3]) // deletedAt
-    .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
+  // 2. 生徒の全ログ取得
+  const logSheet = ss.getSheetByName('記録');
+  if (!logSheet) return [];
+  const logs = logSheet.getDataRange().getValues().slice(1)
+    .filter(r => r[2] === studentId && !r[7])
+    .map(r => ({
+      sessionId: r[1],
+      phase: r[3],
+      value: r[4],
+      text: r[5]
+    }));
+
+  // 3. データ結合
+  const portfolio = sessions.map(s => {
+    const sLogs = logs.filter(l => l.sessionId === s.id);
+    const before = sLogs.find(l => l.phase === 'BEFORE');
+    const after = sLogs.find(l => l.phase === 'AFTER');
     
-  return { success: true, users: users };
+    // ログがない授業はスキップ
+    if (!before && !after) return null;
+
+    return {
+      title: s.title,
+      date: s.date instanceof Date ? s.date.toISOString() : String(s.date),
+      inputType: s.inputType,
+      options: s.options,
+      before: before ? { value: before.value, text: before.text } : null,
+      after: after ? { value: after.value, text: after.text } : null
+    };
+  }).filter(p => p !== null);
+
+  // 日付の新しい順にソート
+  return portfolio.sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 /**
- * 新規授業作成
+ * 生徒間共有用の匿名意見一覧を取得
+ * 名前を含まず、意見のみを返します。
  */
-function createSession(title, inputType, optionsJson) {
+function getAnonymousOpinions(sessionId) {
   const ss = getDB();
-  const sheet = ss.getSheetByName('授業');
+  const sheet = ss.getSheetByName('記録');
+  if (!sheet) return [];
   
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][5] === 'ACTIVE') {
-      sheet.getRange(i + 1, 6).setValue('CLOSED');
-      // キャッシュ破棄
-      CacheService.getScriptCache().remove('POLLING_DATA');
-    }
-  }
-  
-  const sessionId = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
-  sheet.appendRow([
-    sessionId,
-    new Date(),
-    title,
-    inputType,
-    optionsJson,
-    'ACTIVE',
-    'BEFORE',
-    ''
-  ]);
-  
-  return { success: true };
+  // ログ取得
+  const logs = sheet.getDataRange().getValues().slice(1)
+    .filter(r => r[1] === sessionId && !r[7])
+    .map(r => ({
+      phase: r[3],
+      value: r[4],
+      text: r[5]
+    }));
+
+  // 空の記述は除外
+  return logs.filter(l => l.text && l.text.trim() !== '');
 }
 
 /**
- * 授業を終了する（ACTIVE→CLOSED）
+ * 教師用レポート: 生徒ごとの変容サマリー（Before -> After）を取得
  */
-function closeSession(sessionId) {
+function getStudentSummaries(sessionId) {
   const ss = getDB();
-  const sheet = ss.getSheetByName('授業');
-  const data = sheet.getDataRange().getValues();
+  const logSheet = ss.getSheetByName('記録');
+  const userSheet = ss.getSheetByName('名簿');
+  if (!logSheet || logSheet.getLastRow() <= 1) return [];
 
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
-      sheet.getRange(i + 1, 6).setValue('CLOSED');
-      // キャッシュ破棄
-      CacheService.getScriptCache().remove('POLLING_DATA');
-      return { success: true };
-    }
+  // 名簿マップ作成
+  const users = {};
+  if (userSheet && userSheet.getLastRow() > 1) {
+    userSheet.getDataRange().getValues().slice(1)
+      .filter(r => !r[3])
+      .forEach(r => { users[r[0]] = { name: r[1], ruby: r[2] }; });
   }
-  return { success: false, error: 'セッションが見つかりません' };
+
+  // ログ集計
+  const logData = logSheet.getDataRange().getValues().slice(1)
+    .filter(r => r[1] === sessionId && !r[7]);
+
+  const grouped = {};
+  logData.forEach(r => {
+    const sid = r[2];
+    if (!grouped[sid]) grouped[sid] = {};
+    grouped[sid][r[3]] = {
+      value: r[4],
+      text: r[5],
+      timestamp: r[6] instanceof Date ? r[6].toISOString() : String(r[6])
+    };
+  });
+
+  return Object.keys(grouped).map(sid => ({
+    studentId: sid,
+    name: users[sid] ? users[sid].name : sid,
+    ruby: users[sid] ? users[sid].ruby : '',
+    before: grouped[sid]['BEFORE'] || null,
+    after: grouped[sid]['AFTER'] || null
+  }));
 }
 
 /**
- * フェーズ変更（教師用）
- */
-function updateSessionPhase(sessionId, newPhase) {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('授業');
-  const data = sheet.getDataRange().getValues();
-
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === sessionId && data[i][5] === 'ACTIVE') {
-      sheet.getRange(i + 1, 7).setValue(newPhase);
-      // キャッシュ破棄
-      CacheService.getScriptCache().remove('POLLING_DATA');
-      return { success: true, phase: newPhase };
-    }
-  }
-  return { success: false, error: 'セッションが見つかりません' };
-}
-
-/**
- * 特定生徒の授業ログ取得（振り返り用）
+ * 特定生徒の特定授業でのログを取得（振り返り入力画面での過去ログ表示用）
  */
 function getStudentLogs(sessionId, studentId) {
   const ss = getDB();
@@ -382,7 +569,7 @@ function getStudentLogs(sessionId, studentId) {
   if (!sheet || sheet.getLastRow() <= 1) return [];
 
   const rawData = sheet.getDataRange().getValues();
-
+  
   return rawData.slice(1)
     .filter(r => r[1] === sessionId && r[2] === studentId && !r[7])
     .map(r => ({
@@ -393,63 +580,126 @@ function getStudentLogs(sessionId, studentId) {
     }));
 }
 
-/**
- * 名簿に生徒を追加
- */
-function addStudent(name, ruby) {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('名簿');
-  const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
-  sheet.appendRow([studentId, name, ruby, '']);
-  return { success: true, id: studentId };
-}
+// =================================================================
+// 7. 単元管理 (UNIT MANAGEMENT)
+// =================================================================
 
 /**
- * 名簿一括登録
+ * 単元の保存・新規作成
  */
-function addStudentBulk(students) {
+function saveUnit(unitData) {
   const ss = getDB();
-  const sheet = ss.getSheetByName('名簿');
-  if (!sheet) return { success: false, error: '名簿シートが見つかりません' };
-  
-  const rows = students.map((s, i) => {
-    // ユニークID生成 (タイムスタンプ + インデックスで重複回避)
-    const suffix = ('000' + i).slice(-3);
-    const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss') + suffix;
-    return [studentId, s.name, s.ruby, ''];
-  });
-  
-  if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  const sheet = ss.getSheetByName('単元');
+  // 既存データがある場合は更新
+  if (unitData.unitId) {
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      if (data[i][0] === unitData.unitId) {
+        sheet.getRange(i + 1, 2).setValue(unitData.title);
+        sheet.getRange(i + 1, 3).setValue(unitData.inputType);
+        sheet.getRange(i + 1, 4).setValue(JSON.stringify(unitData.options));
+        sheet.getRange(i + 1, 5).setValue(unitData.memo || '');
+        return { success: true, unitId: unitData.unitId };
+      }
+    }
   }
-  
-  return { success: true, count: rows.length };
+
+  // 新規作成
+  const newId = 'u' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
+  sheet.appendRow([
+    newId,
+    unitData.title,
+    unitData.inputType,
+    JSON.stringify(unitData.options),
+    unitData.memo || '',
+    new Date(),
+    ''
+  ]);
+  return { success: true, unitId: newId };
 }
 
 /**
- * 名簿から生徒を削除（論理削除）
+ * 単元リストの取得
  */
-function deleteStudent(studentId) {
+function getUnits() {
   const ss = getDB();
-  const sheet = ss.getSheetByName('名簿');
-  const data = sheet.getDataRange().getValues();
+  const sheet = ss.getSheetByName('単元');
+  if (!sheet || sheet.getLastRow() <= 1) return [];
 
+  return sheet.getDataRange().getValues().slice(1)
+    .filter(r => !r[6]) // deletedAt
+    .map(r => {
+      let opts = {};
+      try { opts = r[3] ? JSON.parse(r[3]) : {}; } catch(e) {}
+      return {
+        unitId: r[0],
+        title: r[1],
+        inputType: r[2],
+        options: opts,
+        memo: r[4],
+        createdAt: r[5] instanceof Date ? r[5].toISOString() : String(r[5])
+      };
+    });
+}
+
+/**
+ * 指定した単元データをもとに、新しい授業を開始します
+ */
+function startSessionFromUnit(unitId) {
+  const ss = getDB();
+  const unitSheet = ss.getSheetByName('単元');
+  const sessionSheet = ss.getSheetByName('授業');
+  
+  const unitData = unitSheet.getDataRange().getValues().slice(1).find(r => r[0] === unitId);
+  if (!unitData) return { success: false, error: '単元が見つかりません' };
+
+  // 既存のアクティブセッションをクローズ
+  const sessionData = sessionSheet.getDataRange().getValues();
+  for (let i = 1; i < sessionData.length; i++) {
+    if (sessionData[i][5] === 'ACTIVE') {
+      sessionSheet.getRange(i + 1, 6).setValue('CLOSED');
+      CacheService.getScriptCache().remove('POLLING_DATA');
+    }
+  }
+
+  // 新規セッション
+  const sessionId = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
+  sessionSheet.appendRow([
+    sessionId,
+    new Date(),
+    unitData[1], // title
+    unitData[2], // inputType
+    unitData[3], // optionsJson
+    'ACTIVE',
+    'BEFORE',
+    ''
+  ]);
+
+  return { success: true };
+}
+
+/**
+ * 単元を削除（論理削除）
+ */
+function deleteUnit(unitId) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('単元');
+  const data = sheet.getDataRange().getValues();
   for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === studentId) {
-      sheet.getRange(i + 1, 4).setValue(new Date());
+    if (data[i][0] === unitId) {
+      sheet.getRange(i + 1, 7).setValue(new Date());
       return { success: true };
     }
   }
-  return { success: false, error: '生徒が見つかりません' };
+  return { success: false };
 }
 
-/* ==============================================
-   Gemini API Integration (AI Socrates)
-   ============================================== */
+// =================================================================
+// 8. AI機能 / Gemini API (Gemini INTEGRATION)
+// =================================================================
 
 /**
- * Gemini APIで問いかけを生成する
- * APIキーが未設定ならスキップ
+ * AIによるソクラテス的問いかけ生成
  */
 function generateSocraticQuestion(sessionTitle, studentText, inputType, studentValue) {
   const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
@@ -499,178 +749,21 @@ function generateSocraticQuestion(sessionTitle, studentText, inputType, studentV
 }
 
 /**
- * Gemini APIキーを保存する（教師用）
+ * PDF指導案からの授業設定抽出
+ * クライアントから送信されたBase64データを受け取ります。
  */
-function saveGeminiApiKey(apiKey) {
-  SCRIPT_PROP.setProperty('GEMINI_API_KEY', apiKey || '');
-  return { success: true };
-}
-
-/**
- * Gemini APIキーが設定済みか確認
- */
-function hasGeminiApiKey() {
-  const key = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
-  return { hasKey: !!(key && key.length > 0) };
-}
-
-/* ==============================================
-   Unit Management (Phase 5: Pre-registry & AI Import)
-   ============================================== */
-
-/**
- * 単元を保存・更新
- */
-function saveUnit(unitData) {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('単元');
-  
-  // 既存があれば更新、なければ新規
-  if (unitData.unitId) {
-    // 更新ロジック (簡易的な全検索)
-    const data = sheet.getDataRange().getValues();
-    for (let i = 1; i < data.length; i++) {
-      if (data[i][0] === unitData.unitId) {
-        // title, inputType, options, memo
-        sheet.getRange(i + 1, 2).setValue(unitData.title);
-        sheet.getRange(i + 1, 3).setValue(unitData.inputType);
-        sheet.getRange(i + 1, 4).setValue(JSON.stringify(unitData.options));
-        sheet.getRange(i + 1, 5).setValue(unitData.memo || '');
-        return { success: true, unitId: unitData.unitId };
-      }
-    }
-  }
-
-  // 新規追加
-  const newId = 'u' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
-  sheet.appendRow([
-    newId,
-    unitData.title,
-    unitData.inputType,
-    JSON.stringify(unitData.options),
-    unitData.memo || '',
-    new Date(),
-    ''
-  ]);
-  return { success: true, unitId: newId };
-}
-
-/**
- * 単元リストを取得
- */
-function getUnits() {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('単元');
-  if (!sheet || sheet.getLastRow() <= 1) return [];
-
-  return sheet.getDataRange().getValues().slice(1)
-    .filter(r => !r[6]) // deletedAt
-    .map(r => {
-      let opts = {};
-      try { opts = r[3] ? JSON.parse(r[3]) : {}; } catch(e) {}
-      return {
-        unitId: r[0],
-        title: r[1],
-        inputType: r[2],
-        options: opts,
-        memo: r[4],
-        createdAt: r[5] instanceof Date ? r[5].toISOString() : String(r[5])
-      };
-    });
-}
-
-/**
- * 単元から授業を開始
- */
-function startSessionFromUnit(unitId) {
-  const ss = getDB();
-  const unitSheet = ss.getSheetByName('単元');
-  const sessionSheet = ss.getSheetByName('授業');
-  
-  // 単元データ取得
-  const unitData = unitSheet.getDataRange().getValues().slice(1).find(r => r[0] === unitId);
-  if (!unitData) return { success: false, error: '単元が見つかりません' };
-
-  // 既存のアクティブセッションをクローズ
-  const sessionData = sessionSheet.getDataRange().getValues();
-  for (let i = 1; i < sessionData.length; i++) {
-    if (sessionData[i][5] === 'ACTIVE') {
-      sessionSheet.getRange(i + 1, 6).setValue('CLOSED');
-      CacheService.getScriptCache().remove('POLLING_DATA');
-    }
-  }
-
-  // 新しいセッションを作成
-  const sessionId = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd_HHmmss');
-  sessionSheet.appendRow([
-    sessionId,
-    new Date(),
-    unitData[1], // title
-    unitData[2], // inputType
-    unitData[3], // optionsJson
-    'ACTIVE',
-    'BEFORE',
-    ''
-  ]);
-
-  return { success: true };
-}
-
-/**
- * 単元を削除（論理削除）
- */
-function deleteUnit(unitId) {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('単元');
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === unitId) {
-      sheet.getRange(i + 1, 7).setValue(new Date());
-      return { success: true };
-    }
-  }
-  return { success: false };
-}
-
-/**
- * 授業の匿名意見一覧を取得（共有用）
- */
-function getAnonymousOpinions(sessionId) {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('記録');
-  if (!sheet) return [];
-  
-  // ログ取得 (deletedAtなし)
-  const logs = sheet.getDataRange().getValues().slice(1)
-    .filter(r => r[1] === sessionId && !r[7])
-    .map(r => ({
-      phase: r[3],
-      value: r[4],
-      text: r[5]
-    }));
-
-  // 空の意見は除外
-  return logs.filter(l => l.text && l.text.trim() !== '');
-}
-
-/**
- * AI PDF Import
- * Drive上のPDFファイルIDを受け取り、解析結果を返す
- */
-function parseLessonPdf(fileId) {
+function parseLessonPdf(base64Data) {
   const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
   if (!apiKey) return { success: false, error: 'AI機能を使うにはAPIキーを設定してください' };
 
   try {
-    // 1. PDF取得 & Base64エンコード
-    const file = DriveApp.getFileById(fileId);
-    const blob = file.getBlob();
-    const base64 = Utilities.base64Encode(blob.getBytes());
-    const mimeType = blob.getContentType(); // application/pdf
-
-    // 2. Gemini APIコール
+    // Gemini APIコール
     const prompt = `
-あなたはベテランの学校教師です。提供された「学習指導案（略案）」のPDFを読み取り、授業支援アプリ「こころスコープ」に登録するための設定データを抽出してください。
+あなたはベテランの学校教師です。提供された「学習指導案（略案）」または「年間指導計画」のPDFを読み取り、授業支援アプリ「こころスコープ」に登録するための設定データを抽出してください。
+
+【抽出ルール】
+- 文書内に複数の単元（授業）が含まれている場合は、可能な限りすべて抽出してください。
+- 文書が1つの単元のみの場合は、それを1つだけ抽出してください。
 
 【授業タイプの判定基準】
 - SLIDER (スライダー): 「賛成 vs 反対」「A vs B」のように、意見が2つの対立軸に分かれる場合。葛藤場面や価値判断を問うもの。
@@ -678,14 +771,18 @@ function parseLessonPdf(fileId) {
 
 【出力フォーマット（JSONのみ）】
 {
-  "title": "授業のタイトル（主題名や教材名など、子供に分かりやすいもの）",
-  "inputType": "SLIDER" または "TAGS",
-  "options": {
-    "minLabel": "SLIDERの場合の左端ラベル（例: 正直に言う）",
-    "maxLabel": "SLIDERの場合の右端ラベル（例: 黙っている）",
-    "tags": ["TAGSの場合の選択肢リスト", "4つ程度"]
-  },
-  "memo": "指導上の留意点やねらいを100文字以内で要約"
+  "units": [
+    {
+      "title": "授業のタイトル（主題名・教材名など）",
+      "inputType": "SLIDER" または "TAGS",
+      "options": {
+        "minLabel": "SLIDERの場合の左端（例: 正直に言う）",
+        "maxLabel": "SLIDERの場合の右端（例: 黙っている）",
+        "tags": ["TAGSの場合の選択肢リスト（4つ程度）"]
+      },
+      "memo": "ねらいや留意点の要約（100文字以内）"
+    }
+  ]
 }
 
 ※JSON以外の余計なテキストは一切含めないでください。`;
@@ -695,7 +792,7 @@ function parseLessonPdf(fileId) {
       contents: [{
         parts: [
           { text: prompt },
-          { inline_data: { mime_type: mimeType, data: base64 } }
+          { inline_data: { mime_type: 'application/pdf', data: base64Data } }
         ]
       }],
       generationConfig: { response_mime_type: "application/json" }
@@ -708,59 +805,70 @@ function parseLessonPdf(fileId) {
       muteHttpExceptions: true
     });
 
-    const json = JSON.parse(response.getContentText());
+    const responseCode = response.getResponseCode();
+    const responseText = response.getContentText();
+    console.log(`Gemini API Response: ${responseCode} - ${responseText}`); // DEBUG LOG
+
+    if (responseCode !== 200) {
+      return { success: false, error: `AI API Error (${responseCode}): ${responseText}` };
+    }
+
+    const json = JSON.parse(responseText);
     if (json.candidates && json.candidates[0] && json.candidates[0].content) {
       const resultText = json.candidates[0].content.parts[0].text;
-      const result = JSON.parse(resultText);
+      // Clean up markdown code blocks if present (relaxed regex)
+      const cleanedText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
+      const result = JSON.parse(cleanedText);
       return { success: true, data: result };
     }
-    return { success: false, error: 'AIからの応答がありませんでした' };
+    return { success: false, error: 'AIからの応答がありませんでした (No candidates)' };
 
   } catch (e) {
     console.error(e);
-    return { success: false, error: 'PDFの読み取りに失敗しました。ファイルIDが正しいか、権限があるか確認してください。詳細: ' + e.toString() };
+    return { success: false, error: 'PDFの解析に失敗: ' + e.toString() };
   }
 }
 
 /**
- * Custom Drive Picker Backend
- * 指定フォルダ（またはルート）内のPDFファイルとフォルダ一覧を返す
+ * Gemini APIキーの保存
  */
-function getDriveFiles(folderId) {
-  try {
-    const parent = folderId ? DriveApp.getFolderById(folderId) : DriveApp.getRootFolder();
-    const folders = [];
-    const files = [];
-
-    // Subfolders
-    const folderIt = parent.getFolders();
-    while (folderIt.hasNext()) {
-      const f = folderIt.next();
-      folders.push({ id: f.getId(), name: f.getName(), type: 'folder' });
-    }
-
-    // PDF Files (MIME type filter)
-    const fileIt = parent.getFilesByType(MimeType.PDF);
-    while (fileIt.hasNext()) {
-      const f = fileIt.next();
-      files.push({ id: f.getId(), name: f.getName(), type: 'file', mimeType: f.getMimeType() });
-    }
-    
-    // Sort by name
-    folders.sort((a, b) => a.name.localeCompare(b.name));
-    files.sort((a, b) => a.name.localeCompare(b.name));
-
-    return { 
-      success: true, 
-      currentFolderId: parent.getId(),
-      currentFolderName: parent.getName(),
-      parentFolderId: getParentFolderId(parent),
-      items: [...folders, ...files] 
-    };
-  } catch(e) {
-    return { success: false, error: e.toString() };
-  }
+function saveGeminiApiKey(apiKey) {
+  SCRIPT_PROP.setProperty('GEMINI_API_KEY', apiKey || '');
+  return { success: true };
 }
+
+/**
+ * 権限認証を強制するためのダミー関数
+ * エディタ上でこの関数を選択して実行すると、必要な権限の承認画面が表示されます。
+ */
+function forceAuth() {
+  SpreadsheetApp.getActiveSpreadsheet();
+  Session.getActiveUser().getEmail();
+  UrlFetchApp.fetch("https://www.google.com");
+  console.log("Auth complete");
+}
+
+/**
+ * Gemini APIキーの有無確認
+ */
+function hasGeminiApiKey() {
+  const key = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
+  return { hasKey: !!(key && key.length > 0) };
+}
+
+// =================================================================
+// 9. その他ユーティリティ (UTILITIES)
+// =================================================================
+
+/**
+ * 教師用パスワードの照合
+ */
+function checkTeacherPassword(password) {
+  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
+  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
+  return { success: (password === correctPass) };
+}
+
 
 function getParentFolderId(folder) {
   try {
@@ -772,147 +880,13 @@ function getParentFolderId(folder) {
   }
 }
 
-/* ==============================================
-   Session History (Phase 4: My Log & Reports)
-   ============================================== */
-
 /**
- * 児童ポートフォリオ取得（一括取得・パフォーマンス最適化）
- */
-function getStudentPortfolio(studentId) {
-  const ss = getDB();
-  
-  // 1. 全授業取得
-  const sessionSheet = ss.getSheetByName('授業');
-  if (!sessionSheet) return [];
-  const sessions = sessionSheet.getDataRange().getValues().slice(1)
-    .filter(r => !r[7]) // deletedAt
-    .map(r => ({
-      id: r[0],
-      date: r[1],
-      title: r[2],
-      inputType: r[3],
-      options: r[4] ? JSON.parse(r[4]) : {}
-    }));
-
-  // 2. 生徒の全ログ取得
-  const logSheet = ss.getSheetByName('記録');
-  if (!logSheet) return [];
-  const logs = logSheet.getDataRange().getValues().slice(1)
-    .filter(r => r[2] === studentId && !r[7]) // studentId match & not deleted
-    .map(r => ({
-      sessionId: r[1],
-      phase: r[3],
-      value: r[4],
-      text: r[5]
-    }));
-
-  // 3. データ結合
-  const portfolio = sessions.map(s => {
-    const sLogs = logs.filter(l => l.sessionId === s.id);
-    const before = sLogs.find(l => l.phase === 'BEFORE');
-    const after = sLogs.find(l => l.phase === 'AFTER');
-    
-    // ログが一つもない授業は除外するか？ -> いや、参加した授業なら表示したいが、ログがないなら参加してないかも。
-    // ここでは「少なくとも1つログがある」または「授業日」でフィルタするが、
-    // シンプルに「ログがあるもの」だけ返すのがポートフォリオらしい。
-    if (!before && !after) return null;
-
-    return {
-      title: s.title,
-      date: s.date instanceof Date ? s.date.toISOString() : String(s.date),
-      inputType: s.inputType,
-      options: s.options,
-      before: before ? { value: before.value, text: before.text } : null,
-      after: after ? { value: after.value, text: after.text } : null
-    };
-  }).filter(p => p !== null);
-
-  // 日付降順
-  return portfolio.sort((a, b) => new Date(b.date) - new Date(a.date));
-}
-
-/**
- * My Log (Student History)
- */
-function getAllSessions() {
-  const ss = getDB();
-  const sheet = ss.getSheetByName('授業');
-  if (!sheet || sheet.getLastRow() <= 1) return [];
-
-  return sheet.getDataRange().getValues().slice(1)
-    .filter(r => !r[7])
-    .map(r => {
-      let opts = {};
-      try { opts = r[4] ? JSON.parse(r[4]) : {}; } catch(e) {}
-      return {
-        id: r[0],
-        date: r[1] instanceof Date ? r[1].toISOString() : String(r[1]),
-        title: r[2],
-        inputType: r[3],
-        options: opts,
-        status: r[5],
-        phase: r[6] || 'BEFORE'
-      };
-    });
-}
-
-/**
- * 教師用: 全生徒の変容サマリーを取得
- */
-function getStudentSummaries(sessionId) {
-  const ss = getDB();
-  const logSheet = ss.getSheetByName('記録');
-  const userSheet = ss.getSheetByName('名簿');
-  if (!logSheet || logSheet.getLastRow() <= 1) return [];
-
-  // 名簿をマップ化
-  const users = {};
-  if (userSheet && userSheet.getLastRow() > 1) {
-    userSheet.getDataRange().getValues().slice(1)
-      .filter(r => !r[3])
-      .forEach(r => { users[r[0]] = { name: r[1], ruby: r[2] }; });
-  }
-
-  // ログを生徒ごとに集計
-  const logData = logSheet.getDataRange().getValues().slice(1)
-    .filter(r => r[1] === sessionId && !r[7]);
-
-  const grouped = {};
-  logData.forEach(r => {
-    const sid = r[2];
-    if (!grouped[sid]) grouped[sid] = {};
-    grouped[sid][r[3]] = {
-      value: r[4],
-      text: r[5],
-      timestamp: r[6] instanceof Date ? r[6].toISOString() : String(r[6])
-    };
-  });
-
-  return Object.keys(grouped).map(sid => ({
-    studentId: sid,
-    name: users[sid] ? users[sid].name : sid,
-    ruby: users[sid] ? users[sid].ruby : '',
-    before: grouped[sid]['BEFORE'] || null,
-    after: grouped[sid]['AFTER'] || null
-  }));
-}
-
-/**
- * 【重要】初回承認用・手動セットアップ関数
- * 1. エディタのツールバーで「manualSetup」を選択
- * 2. 「実行」をクリック
- * 3. 権限の承認画面が出たら許可する
+ * 初回セットアップ用関数（手動実行用）
  */
 function manualSetup() {
   try {
     const ss = getDB();
-    console.log("---------------------------------------------------");
-    console.log("✅ セットアップ完了！");
-    console.log("データベースID:", ss.getId());
-    console.log("データベース名:", ss.getName());
-    console.log("WebアプリのURLを再読み込みしてください。");
-    console.log("---------------------------------------------------");
+    console.log("✅ セットアップ完了！ DB ID:", ss.getId());
   } catch(e) {
     console.error("セットアップ失敗:", e);
   }
