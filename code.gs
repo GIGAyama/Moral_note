@@ -17,8 +17,33 @@ const SCRIPT_PROP = PropertiesService.getScriptProperties();
 // Gemini API設定 (APIキーは「先生用ダッシュボード」の設定画面から入力します)
 const GEMINI_API_KEY = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
 
-// 認証設定 (デフォルトパスワード)
+// 認証設定
 const DEFAULT_TEACHER_PASSWORD = "admin";
+const MAX_LOGIN_ATTEMPTS = 5;         // 最大試行回数
+const LOCKOUT_DURATION_MIN = 10;      // ロックアウト時間（分）
+
+// =================================================================
+// 1b. バリデーション (VALIDATION)
+// =================================================================
+const MAX_NAME_LENGTH = 50;
+const MAX_TEXT_LENGTH = 1000;
+const MAX_VALUE_LENGTH = 5000;
+
+function sanitizeText(text) {
+  if (!text) return '';
+  return String(text).replace(/<[^>]*>/g, '').substring(0, MAX_TEXT_LENGTH);
+}
+
+function validateStudentName(name) {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  return trimmed.length > 0 && trimmed.length <= MAX_NAME_LENGTH;
+}
+
+function validateEmail(email) {
+  if (!email) return true; // 空はOK
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
+}
 
 // =================================================================
 // 2. コア機能 (CORE FUNCTIONS)
@@ -356,10 +381,16 @@ function createSession(title, inputType, optionsJson) {
  * 名簿に生徒を1名追加します
  */
 function addStudent(name, ruby, email) {
+  if (!validateStudentName(name)) {
+    return { success: false, error: '名前は1〜50文字で入力してください' };
+  }
+  if (email && !validateEmail(email)) {
+    return { success: false, error: 'メールアドレスの形式が正しくありません' };
+  }
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
-  sheet.appendRow([studentId, name, ruby, '', email || '']);
+  sheet.appendRow([studentId, sanitizeText(name).trim(), sanitizeText(ruby).trim(), '', (email || '').trim()]);
   return { success: true, id: studentId };
 }
 
@@ -463,17 +494,33 @@ function submitLog(data) {
     }
   }
 
-  const sheet = ss.getSheetByName('記録');
+  // 入力値バリデーション
+  if (!data.sessionId || !data.studentId || !data.phase) {
+    return { success: false, error: '必須パラメータが不足しています' };
+  }
+  const safeText = sanitizeText(data.text);
+  const safeValue = String(data.value || '').substring(0, MAX_VALUE_LENGTH);
+
+  // 重複送信チェック
+  const logSheet = ss.getSheetByName('記録');
+  if (logSheet && logSheet.getLastRow() > 1) {
+    const existing = logSheet.getDataRange().getValues().slice(1)
+      .find(r => r[1] === data.sessionId && r[2] === data.studentId && r[3] === data.phase && !r[7]);
+    if (existing) {
+      return { success: false, error: 'すでにこのフェーズで送信済みです', duplicate: true };
+    }
+  }
+
   const logId = Utilities.getUuid();
   const timestamp = new Date();
 
-  sheet.appendRow([
+  logSheet.appendRow([
     logId,
     data.sessionId,
     data.studentId,
     data.phase,
-    data.value,
-    data.text,
+    safeValue,
+    safeText,
     timestamp,
     ''
   ]);
@@ -921,6 +968,58 @@ function hasGeminiApiKey() {
 // =================================================================
 
 /**
+ * 授業データをCSV形式で取得（教師用エクスポート）
+ */
+function exportSessionCsv(sessionId) {
+  const ss = getDB();
+
+  // 授業情報
+  const sessionSheet = ss.getSheetByName('授業');
+  const sessionRow = sessionSheet.getDataRange().getValues().slice(1).find(r => r[0] === sessionId);
+  if (!sessionRow) return { success: false, error: '授業が見つかりません' };
+  const sessionTitle = sessionRow[2];
+  const inputType = sessionRow[3];
+
+  // 名簿マップ
+  const userSheet = ss.getSheetByName('名簿');
+  const users = {};
+  if (userSheet && userSheet.getLastRow() > 1) {
+    userSheet.getDataRange().getValues().slice(1)
+      .filter(r => !r[3])
+      .forEach(r => { users[r[0]] = { name: r[1], ruby: r[2] }; });
+  }
+
+  // ログ取得
+  const logSheet = ss.getSheetByName('記録');
+  const logs = logSheet.getDataRange().getValues().slice(1)
+    .filter(r => r[1] === sessionId && !r[7]);
+
+  // 児童ごとにグルーピング
+  const grouped = {};
+  logs.forEach(r => {
+    const sid = r[2];
+    if (!grouped[sid]) grouped[sid] = {};
+    grouped[sid][r[3]] = { value: r[4], text: r[5] };
+  });
+
+  // CSV組み立て
+  const rows = [['名前', 'ふりがな', '導入_値', '導入_理由', '振り返り_値', '振り返り_理由']];
+  Object.keys(grouped).forEach(sid => {
+    const u = users[sid] || { name: sid, ruby: '' };
+    const b = grouped[sid]['BEFORE'] || {};
+    const a = grouped[sid]['AFTER'] || {};
+    rows.push([
+      u.name, u.ruby,
+      String(b.value || ''), String(b.text || ''),
+      String(a.value || ''), String(a.text || '')
+    ]);
+  });
+
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  return { success: true, csv: csv, title: sessionTitle, inputType: inputType };
+}
+
+/**
  * 全授業セッション一覧を取得（履歴表示用）
  */
 function getAllSessions() {
@@ -1017,12 +1116,54 @@ ${historyText}
 }
 
 /**
- * 教師用パスワードの照合
+ * 教師用パスワードの照合（試行回数制限付き）
  */
 function checkTeacherPassword(password) {
+  const cache = CacheService.getScriptCache();
+  const lockKey = 'TEACHER_LOGIN_LOCK';
+  const attemptKey = 'TEACHER_LOGIN_ATTEMPTS';
+
+  // ロックアウト確認
+  const locked = cache.get(lockKey);
+  if (locked) {
+    return { success: false, error: 'ログイン試行回数の上限に達しました。しばらく待ってから再試行してください。', locked: true };
+  }
+
   const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
   const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
-  return { success: (password === correctPass) };
+  const isDefault = !setPass || setPass === DEFAULT_TEACHER_PASSWORD;
+
+  if (password === correctPass) {
+    // 成功: 試行カウントをリセット
+    cache.remove(attemptKey);
+    return { success: true, requirePasswordChange: isDefault };
+  }
+
+  // 失敗: 試行回数をインクリメント
+  let attempts = parseInt(cache.get(attemptKey) || '0') + 1;
+  if (attempts >= MAX_LOGIN_ATTEMPTS) {
+    cache.put(lockKey, 'true', LOCKOUT_DURATION_MIN * 60);
+    cache.remove(attemptKey);
+    return { success: false, error: `${MAX_LOGIN_ATTEMPTS}回連続で失敗しました。${LOCKOUT_DURATION_MIN}分間ロックされます。`, locked: true };
+  }
+  cache.put(attemptKey, String(attempts), 600); // 10分間保持
+  return { success: false, error: `パスワードが違います（残り${MAX_LOGIN_ATTEMPTS - attempts}回）` };
+}
+
+/**
+ * 教師用パスワードの変更
+ */
+function changeTeacherPassword(currentPass, newPass) {
+  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
+  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
+  if (currentPass !== correctPass) {
+    return { success: false, error: '現在のパスワードが違います' };
+  }
+  if (!newPass || newPass.length < 4) {
+    return { success: false, error: 'パスワードは4文字以上にしてください' };
+  }
+  SCRIPT_PROP.setProperty('TEACHER_PASSWORD', newPass);
+  return { success: true };
 }
 
 

@@ -688,17 +688,19 @@
       const prefix = this.mode === 'REFLECTION' ? 'ref-' : '';
 
       let html = `<div class="ranking-list mx-auto" style="max-width: 400px;">`;
-      html += `<p class="text-center text-muted small mb-2">上にあるほど「大事」です。<br>矢印ボタンで並べ替えてね。</p>`;
+      html += `<p class="text-center text-muted small mb-2"><i class="bi bi-hand-index-thumb"></i> <ruby>長押<rt>ながお</rt></ruby>しでドラッグ、または<ruby>矢印<rt>やじるし</rt></ruby>ボタンで<ruby>並<rt>なら</rt></ruby>べ<ruby>替<rt>か</rt></ruby>えてね。<br><ruby>上<rt>うえ</rt></ruby>にあるほど「<ruby>大事<rt>だいじ</rt></ruby>」です。</p>`;
 
       items.forEach((item, index) => {
         html += `
-          <div class="card mb-2 ranking-item" data-value="${item}" id="${prefix}rank-item-${index}">
+          <div class="card mb-2 ranking-item" data-value="${item}" id="${prefix}rank-item-${index}" draggable="true"
+            style="cursor: grab; touch-action: none; user-select: none;">
             <div class="card-body p-2 d-flex align-items-center">
-               <div class="me-3 fw-bold fs-4 text-primary rank-num">${index + 1}</div>
+               <div class="me-2 text-muted" style="cursor:grab;"><i class="bi bi-grip-vertical fs-4"></i></div>
+               <div class="me-2 fw-bold fs-4 text-primary rank-num">${index + 1}</div>
                <div class="flex-grow-1 fw-bold">${item}</div>
                <div class="d-flex flex-column gap-1">
-                 <button class="btn btn-sm btn-outline-secondary" onclick="patternRenderer.moveRank(this, -1)">▲</button>
-                 <button class="btn btn-sm btn-outline-secondary" onclick="patternRenderer.moveRank(this, 1)">▼</button>
+                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="patternRenderer.moveRank(this, -1)">▲</button>
+                 <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="patternRenderer.moveRank(this, 1)">▼</button>
                </div>
             </div>
           </div>
@@ -707,6 +709,73 @@
       html += `</div>`;
       this.container.innerHTML = html;
       this.updateRankNumbers();
+      this._initRankingDragDrop();
+    }
+
+    _initRankingDragDrop() {
+      const list = this.container.querySelector('.ranking-list');
+      if (!list) return;
+      let dragItem = null;
+      const self = this;
+
+      // HTML5 Drag (desktop)
+      list.addEventListener('dragstart', (e) => {
+        dragItem = e.target.closest('.ranking-item');
+        if (!dragItem) return;
+        dragItem.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      list.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        const target = e.target.closest('.ranking-item');
+        if (target && target !== dragItem) {
+          const rect = target.getBoundingClientRect();
+          if (e.clientY < rect.top + rect.height / 2) {
+            list.insertBefore(dragItem, target);
+          } else {
+            list.insertBefore(dragItem, target.nextSibling);
+          }
+        }
+      });
+      list.addEventListener('dragend', () => {
+        if (dragItem) dragItem.style.opacity = '1';
+        dragItem = null;
+        self.updateRankNumbers();
+      });
+
+      // Touch drag (mobile/tablet)
+      list.addEventListener('touchstart', (e) => {
+        dragItem = e.target.closest('.ranking-item');
+        if (!dragItem) return;
+        dragItem.style.zIndex = '100';
+        dragItem.style.boxShadow = '0 4px 16px rgba(0,0,0,0.2)';
+      }, { passive: true });
+
+      list.addEventListener('touchmove', (e) => {
+        if (!dragItem) return;
+        e.preventDefault();
+        const touchY = e.touches[0].clientY;
+        const items = Array.from(list.querySelectorAll('.ranking-item'));
+        for (const item of items) {
+          if (item === dragItem) continue;
+          const rect = item.getBoundingClientRect();
+          const mid = rect.top + rect.height / 2;
+          if (touchY < mid && item.compareDocumentPosition(dragItem) & Node.DOCUMENT_POSITION_FOLLOWING) {
+            list.insertBefore(dragItem, item); break;
+          } else if (touchY > mid && item.compareDocumentPosition(dragItem) & Node.DOCUMENT_POSITION_PRECEDING) {
+            list.insertBefore(dragItem, item.nextSibling); break;
+          }
+        }
+      }, { passive: false });
+
+      list.addEventListener('touchend', () => {
+        if (dragItem) {
+          dragItem.style.zIndex = '';
+          dragItem.style.boxShadow = '';
+          dragItem = null;
+          self.updateRankNumbers();
+        }
+      });
     }
 
     moveRank(btn, direction) {
@@ -720,6 +789,9 @@
       } else if (direction === 1 && index < all.length - 1) {
         list.insertBefore(item, all[index + 1].nextSibling);
       }
+      item.style.transition = 'transform 0.2s';
+      item.style.transform = 'scale(1.03)';
+      setTimeout(() => { item.style.transform = ''; }, 200);
       this.updateRankNumbers();
     }
 
@@ -727,8 +799,8 @@
       if (!this.container) return;
       const items = this.container.querySelectorAll('.ranking-item');
       items.forEach((item, idx) => {
-        item.querySelector('.rank-num').innerText = idx + 1;
-        // 1位は色を変えるなど
+        const numEl = item.querySelector('.rank-num');
+        numEl.innerText = idx + 1;
         if (idx === 0) item.classList.add('border-primary');
         else item.classList.remove('border-primary');
       });

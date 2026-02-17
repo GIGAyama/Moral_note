@@ -56,6 +56,19 @@
   });
 
   /**
+   * UI Helpers
+   */
+  function updateCharCount(textarea, counterId) {
+    const counter = document.getElementById(counterId);
+    if (counter) {
+      const len = textarea.value.length;
+      const max = textarea.maxLength || 500;
+      counter.textContent = `${len} / ${max}`;
+      counter.classList.toggle('text-danger', len >= max);
+    }
+  }
+
+  /**
    * UI Logic (Safe Transition)
    */
   function showView(viewId) {
@@ -369,8 +382,11 @@
       });
   }
 
+  let isSubmitting = false; // 二重送信防止フラグ
+
   function submitOpinion() {
     if (!currentUser || !currentSession) return;
+    if (isSubmitting) return; // 二重送信防止
 
     const text = document.getElementById('input-text').value;
 
@@ -390,35 +406,66 @@
       text: text
     };
 
-    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+    // ボタン無効化
+    isSubmitting = true;
+    const submitBtn = document.querySelector('#view-entry .btn-primary[onclick="submitOpinion()"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 送信中...';
+    }
 
     runGoogleScript('submitLog', payload)
-      .then(() => {
-        Swal.fire({
-          icon: 'success',
-          title: '送りました！',
-          text: '友達の意見も見てみよう',
-          timer: 1500,
-          showConfirmButton: false
-        });
+      .then((result) => {
+        if (result && !result.success && result.duplicate) {
+          Swal.fire({ icon: 'info', title: 'もう送信済みだよ', text: '友達の意見を見てみよう', timer: 2000, showConfirmButton: false });
+        } else if (result && !result.success) {
+          Swal.fire({ icon: 'error', title: 'エラー', text: result.error });
+          // エラー時はボタンを復活
+          isSubmitting = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+          }
+          return;
+        } else {
+          Swal.fire({
+            icon: 'success',
+            title: '送りました！',
+            text: '友達の意見も見てみよう',
+            timer: 1500,
+            showConfirmButton: false
+          });
+        }
 
-        // 全パターン対応: 対話モード表示
+        // 送信成功後の処理
         showDialogueMode(val);
 
-        // 送信後: みんなの考えボタンを表示
         const btnOpinion = document.getElementById('btn-opinion-share');
         if (btnOpinion) btnOpinion.classList.remove('d-none');
 
-        // フォームリセット
+        // 送信ボタンを「送信済み」状態に
+        if (submitBtn) {
+          submitBtn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> 送信済み';
+          submitBtn.classList.remove('btn-primary');
+          submitBtn.classList.add('btn-secondary');
+        }
+
         document.getElementById('input-text').value = '';
 
-        // AIフィードバックを非同期で取得
+        // AIフィードバック
         document.getElementById('ai-feedback-card').classList.add('d-none');
         if (currentSession) {
           requestAiFeedback(currentSession.title, text, currentSession.inputType, val);
         }
       })
-      .catch(showError);
+      .catch(err => {
+        isSubmitting = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+        }
+        showError(err);
+      });
   }
 
   /**
@@ -447,13 +494,11 @@
         logoutTeacher();
       }
     } else {
-      // サーバーサイド認証
+      // サーバーサイド認証（試行回数制限付き）
       Swal.fire({
         title: '先生用パスワード',
         input: 'password',
-        inputAttributes: {
-          autocapitalize: 'off'
-        },
+        inputAttributes: { autocapitalize: 'off' },
         showCancelButton: true,
         confirmButtonText: 'ログイン',
         showLoaderOnConfirm: true,
@@ -461,24 +506,62 @@
           return runGoogleScript('checkTeacherPassword', pass)
             .then(result => {
               if (!result.success) {
-                throw new Error('パスワードが違います');
+                throw new Error(result.error || 'パスワードが違います');
               }
-              return true;
+              return result;
             })
             .catch(error => {
-              Swal.showValidationMessage(
-                `ログイン失敗: ${error}`
-              )
-            })
+              Swal.showValidationMessage(`${error}`);
+            });
         },
         allowOutsideClick: () => !Swal.isLoading()
       }).then((result) => {
         if (result.isConfirmed) {
           localStorage.setItem('isTeacher', 'true');
-          resetApp(); // リロードせずにモード切替
+          // デフォルトパスワードの場合は変更を促す
+          if (result.value && result.value.requirePasswordChange) {
+            promptPasswordChange();
+          } else {
+            resetApp();
+          }
         }
       })
     }
+  }
+
+  function promptPasswordChange() {
+    Swal.fire({
+      title: 'パスワードを変更してください',
+      html: '<p class="small text-muted">セキュリティのため、デフォルトパスワードから変更してください。</p>' +
+        '<input type="password" id="swal-new-pass" class="swal2-input" placeholder="新しいパスワード（4文字以上）">' +
+        '<input type="password" id="swal-new-pass-confirm" class="swal2-input" placeholder="もう一度入力">',
+      showCancelButton: true,
+      confirmButtonText: '変更する',
+      cancelButtonText: 'あとで変更',
+      preConfirm: () => {
+        const newPass = document.getElementById('swal-new-pass').value;
+        const confirm = document.getElementById('swal-new-pass-confirm').value;
+        if (!newPass || newPass.length < 4) {
+          Swal.showValidationMessage('4文字以上で入力してください');
+          return false;
+        }
+        if (newPass !== confirm) {
+          Swal.showValidationMessage('パスワードが一致しません');
+          return false;
+        }
+        return runGoogleScript('changeTeacherPassword', 'admin', newPass)
+          .then(result => {
+            if (!result.success) throw new Error(result.error);
+            return true;
+          })
+          .catch(err => { Swal.showValidationMessage(String(err)); });
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ icon: 'success', title: 'パスワードを変更しました', timer: 1500, showConfirmButton: false });
+      }
+      resetApp();
+    });
   }
 
   function toggleSessionOptions() {
@@ -732,10 +815,9 @@
 
   function submitReflection() {
     if (!currentUser || !currentSession) return;
+    if (isSubmitting) return;
 
     const text = document.getElementById('reflection-text').value;
-
-    // PatternRendererから値取得
     const val = patternRenderer.getValue();
 
     if (val === null || val === '') {
@@ -751,19 +833,43 @@
       text: text
     };
 
-    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+    isSubmitting = true;
+    const submitBtn = document.querySelector('#view-reflection .btn-success[onclick="submitReflection()"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 送信中...';
+    }
 
     runGoogleScript('submitLog', payload)
-      .then(() => {
-        Swal.fire({
-          icon: 'success',
-          title: '振り返りを送りました！',
-          timer: 1500,
-          showConfirmButton: false
-        });
+      .then((result) => {
+        if (result && !result.success && result.duplicate) {
+          Swal.fire({ icon: 'info', title: 'もう送信済みだよ', timer: 1500, showConfirmButton: false });
+        } else if (result && !result.success) {
+          Swal.fire({ icon: 'error', title: 'エラー', text: result.error });
+          isSubmitting = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+          }
+          return;
+        } else {
+          Swal.fire({
+            icon: 'success',
+            title: '振り返りを送りました！',
+            timer: 1500,
+            showConfirmButton: false
+          });
+        }
         showView('view-done');
       })
-      .catch(showError);
+      .catch(err => {
+        isSubmitting = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+        }
+        showError(err);
+      });
   }
 
   /**
@@ -1539,12 +1645,49 @@
   }
 
   // --- 単元別履歴 ---
+  function exportCsv() {
+    const select = document.getElementById('history-session-select');
+    const sessionId = select ? select.value : '';
+    if (!sessionId) {
+      Swal.fire('授業を選んでください', '', 'warning');
+      return;
+    }
+    Swal.fire({ title: 'CSV生成中...', didOpen: () => Swal.showLoading() });
+    runGoogleScript('exportSessionCsv', sessionId).then(result => {
+      Swal.close();
+      if (!result || !result.success) {
+        Swal.fire('エクスポート失敗', result ? result.error : '', 'error');
+        return;
+      }
+      // BOM付きUTF-8でCSVダウンロード
+      const bom = '\uFEFF';
+      const blob = new Blob([bom + result.csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${result.title || '授業データ'}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }).catch(err => {
+      Swal.close();
+      showError(err);
+    });
+  }
+
   function loadSessionHistory(sessionId) {
     const container = document.getElementById('history-session-detail');
     if (!sessionId) {
       container.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i><p>授業を選んでください</p></div>';
+      // CSVボタンを隠す
+      const csvBtn = document.getElementById('btn-export-csv');
+      if (csvBtn) csvBtn.classList.add('d-none');
       return;
     }
+    // CSVエクスポートボタンを表示
+    const csvBtn = document.getElementById('btn-export-csv');
+    if (csvBtn) csvBtn.classList.remove('d-none');
 
     container.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
 
@@ -1754,9 +1897,20 @@
 
   function copyObservation() {
     const textarea = document.getElementById('observation-text');
-    textarea.select();
-    document.execCommand('copy');
-    Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+    const text = textarea.value;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+      }).catch(() => {
+        textarea.select();
+        document.execCommand('copy');
+        Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+      });
+    } else {
+      textarea.select();
+      document.execCommand('copy');
+      Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+    }
   }
 
   /**
@@ -2176,6 +2330,7 @@
     currentSession = null;
     currentPhase = 'BEFORE';
     isAutoLogin = false;
+    isSubmitting = false;
     if (scatterChart) {
       scatterChart.destroy();
       scatterChart = null;

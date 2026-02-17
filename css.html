@@ -358,4 +358,87 @@
   .dialogue-fs-close:hover {
     background: rgba(255, 255, 255, 0.35);
   }
+
+  /* ============================
+     Mobile Responsive Enhancements
+     ============================ */
+  @media (max-width: 600px) {
+    body {
+      padding-bottom: 40px;
+    }
+    footer.fixed-bottom {
+      position: relative !important;
+    }
+    .container {
+      padding-left: 8px;
+      padding-right: 8px;
+    }
+    .btn-lg {
+      padding: 0.8rem 1.2rem;
+      font-size: 1.2rem;
+    }
+    .card-body {
+      padding: 16px !important;
+    }
+    /* ランキング: タッチ操作しやすく */
+    .ranking-item .card-body {
+      padding: 10px !important;
+    }
+    .ranking-item .bi-grip-vertical {
+      font-size: 1.6rem !important;
+    }
+    /* 対話モードフルスクリーン */
+    .dialogue-fs-content h1 {
+      font-size: 2.5rem;
+    }
+    .dialogue-fs-content p {
+      font-size: 1.4rem;
+    }
+    .dialogue-fs-content .dialogue-fs-icon {
+      font-size: 4rem;
+    }
+    /* フルスクリーン意見表示 */
+    .fs-opinion-card {
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .fs-opinion-card .fs-opinion-text {
+      font-size: 1.05rem;
+    }
+  }
+
+  /* Tablet */
+  @media (min-width: 601px) and (max-width: 1024px) {
+    footer.fixed-bottom {
+      position: relative !important;
+    }
+  }
+
+  /* スライダーのタッチターゲット拡大 */
+  input[type=range] {
+    height: 32px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 4px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #1a73e8;
+    cursor: pointer;
+    margin-top: -14px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  }
+
+  /* 文字数カウンター */
+  #char-count-entry.text-danger,
+  #char-count-reflect.text-danger {
+    font-weight: bold;
+  }
 </style>
