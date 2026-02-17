@@ -120,12 +120,12 @@ function setupSheets(ss) {
   let userSheet = ss.getSheetByName('名簿');
   if (!userSheet) {
     userSheet = ss.insertSheet('名簿');
-    userSheet.getRange(1, 1, 1, 4).setValues([['studentId', 'name', 'ruby', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
+    userSheet.getRange(1, 1, 1, 5).setValues([['studentId', 'name', 'ruby', 'deletedAt', 'email']]).setBackground('#e8eaed').setFontWeight('bold');
     // デモデータ
-    userSheet.getRange(2, 1, 3, 4).setValues([
-      ['s001', '佐藤 健太', 'さとう けんた', ''],
-      ['s002', '鈴木 愛', 'すずき あい', ''],
-      ['s003', '高橋 翔', 'たかはし かける', '']
+    userSheet.getRange(2, 1, 3, 5).setValues([
+      ['s001', '佐藤 健太', 'さとう けんた', '', ''],
+      ['s002', '鈴木 愛', 'すずき あい', '', ''],
+      ['s003', '高橋 翔', 'たかはし かける', '', '']
     ]);
   }
 
@@ -172,15 +172,33 @@ function setupSheets(ss) {
  */
 function getInitialData() {
   try {
-    const ss = getDB(); 
-    
+    const ss = getDB();
+
+    // アクセス中のユーザーのメールアドレスを取得
+    let callerEmail = '';
+    try {
+      callerEmail = Session.getActiveUser().getEmail() || '';
+    } catch (e) {
+      console.warn('Could not get active user email:', e);
+    }
+
     // 名簿取得
     const userSheet = ss.getSheetByName('名簿');
     let users = [];
+    let autoLoginStudent = null;
     if (userSheet && userSheet.getLastRow() > 1) {
-      users = userSheet.getDataRange().getValues().slice(1)
-        .filter(r => !r[3]) // deletedAtがないもの
-        .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
+      const rows = userSheet.getDataRange().getValues().slice(1)
+        .filter(r => !r[3]); // deletedAtがないもの
+
+      users = rows.map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+
+      // メールアドレスで自動照合
+      if (callerEmail) {
+        const matched = rows.find(r => r[4] && String(r[4]).toLowerCase().trim() === callerEmail.toLowerCase().trim());
+        if (matched) {
+          autoLoginStudent = { id: matched[0], name: matched[1], ruby: matched[2] };
+        }
+      }
     }
 
     // アクティブな授業を取得
@@ -206,7 +224,13 @@ function getInitialData() {
       if (sessions.length > 0) activeSession = sessions[0];
     }
 
-    return { success: true, users: users, activeSession: activeSession };
+    return {
+      success: true,
+      users: users,
+      activeSession: activeSession,
+      autoLoginStudent: autoLoginStudent,
+      callerEmail: callerEmail
+    };
 
   } catch (e) {
     console.error(e);
@@ -331,11 +355,11 @@ function createSession(title, inputType, optionsJson) {
 /**
  * 名簿に生徒を1名追加します
  */
-function addStudent(name, ruby) {
+function addStudent(name, ruby, email) {
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
-  sheet.appendRow([studentId, name, ruby, '']);
+  sheet.appendRow([studentId, name, ruby, '', email || '']);
   return { success: true, id: studentId };
 }
 
@@ -347,18 +371,18 @@ function addStudentBulk(students) {
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   if (!sheet) return { success: false, error: '名簿シートが見つかりません' };
-  
+
   const rows = students.map((s, i) => {
     // ユニークID生成 (タイムスタンプ + インデックスで重複回避)
     const suffix = ('000' + i).slice(-3);
     const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss') + suffix;
-    return [studentId, s.name, s.ruby, ''];
+    return [studentId, s.name, s.ruby, '', s.email || ''];
   });
-  
+
   if (rows.length > 0) {
     sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   }
-  
+
   return { success: true, count: rows.length };
 }
 
@@ -389,9 +413,26 @@ function getStudents() {
 
   const users = userSheet.getDataRange().getValues().slice(1)
     .filter(r => !r[3]) // deletedAt
-    .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
-    
+    .map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+
   return { success: true, users: users };
+}
+
+/**
+ * 児童のメールアドレスを更新します（教師用）
+ */
+function updateStudentEmail(studentId, email) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === studentId && !data[i][3]) {
+      sheet.getRange(i + 1, 5).setValue(email || '');
+      return { success: true };
+    }
+  }
+  return { success: false, error: '生徒が見つかりません' };
 }
 
 // =================================================================
@@ -400,13 +441,32 @@ function getStudents() {
 
 /**
  * 生徒からの回答ログを保存します
+ * サーバーサイドでメールアドレス検証を行い、なりすましを防止します
  */
 function submitLog(data) {
   const ss = getDB();
+
+  // メールアドレスによる本人確認
+  let callerEmail = '';
+  try {
+    callerEmail = Session.getActiveUser().getEmail() || '';
+  } catch (e) { }
+
+  if (callerEmail) {
+    const userSheet = ss.getSheetByName('名簿');
+    if (userSheet && userSheet.getLastRow() > 1) {
+      const rows = userSheet.getDataRange().getValues().slice(1);
+      const student = rows.find(r => r[0] === data.studentId && !r[3]);
+      if (student && student[4] && String(student[4]).toLowerCase().trim() !== callerEmail.toLowerCase().trim()) {
+        return { success: false, error: '認証エラー: 自分のアカウントでログインしてください' };
+      }
+    }
+  }
+
   const sheet = ss.getSheetByName('記録');
   const logId = Utilities.getUuid();
   const timestamp = new Date();
-  
+
   sheet.appendRow([
     logId,
     data.sessionId,

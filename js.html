@@ -10,6 +10,7 @@
   let scatterChart = null;     // 教師用: 散布図チャートインスタンス
   let loadingTimeout = null;   // 読み込み監視用タイマー
   let isPageVisible = true;    // ブラウザタブの表示状態（ポーリング制御用）
+  let isAutoLogin = false;     // メールアドレス自動ログインフラグ
 
   // Google Drive Picker State
   let pickerModal = null;
@@ -80,16 +81,25 @@
    * 4. 生徒用機能 (STUDENT FUNCTIONS)
    * =================================================================
    */
-  function login() {
-    const select = document.getElementById('student-select');
-    const uid = select.value;
+  function login(autoUid) {
+    let uid = autoUid;
     if (!uid) {
-      Swal.fire('名前を選んでね', '', 'warning');
-      return;
+      const select = document.getElementById('student-select');
+      uid = select.value;
+      if (!uid) {
+        Swal.fire('名前を選んでね', '', 'warning');
+        return;
+      }
     }
 
     localStorage.setItem('studentId', uid);
     currentUser = { id: uid };
+
+    // 自動ログイン時は「名前を変える」リンクを非表示
+    const btnLogout = document.getElementById('btn-logout-student');
+    if (btnLogout) {
+      btnLogout.classList.toggle('d-none', isAutoLogin);
+    }
 
     // 授業有無で分岐
     if (currentSession) {
@@ -420,6 +430,10 @@
   }
 
   function logoutStudent() {
+    if (isAutoLogin) {
+      Swal.fire('自動ログイン中', 'Googleアカウントで自動ログインしているため、名前を変更できません。', 'info');
+      return;
+    }
     localStorage.removeItem('studentId');
     currentUser = null;
     showView('view-login');
@@ -835,14 +849,26 @@
       return;
     }
 
-    container.innerHTML = users.map(u =>
-      `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
-       <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
-       <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
-         <i class="bi bi-trash"></i>
-       </button>
-     </div>`
-    ).join('');
+    container.innerHTML = users.map(u => {
+      const emailBadge = u.email
+        ? `<span class="badge bg-success bg-opacity-25 text-success ms-2" title="${u.email}"><i class="bi bi-envelope-check"></i></span>`
+        : `<span class="badge bg-warning bg-opacity-25 text-warning ms-2" title="メール未設定"><i class="bi bi-envelope-x"></i></span>`;
+      return `<div class="d-flex justify-content-between align-items-center border-bottom py-2 px-2">
+       <div>
+         <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
+         ${emailBadge}
+         <small class="text-muted d-block" style="font-size:0.75rem;">${u.email || '自動ログイン未設定'}</small>
+       </div>
+       <div class="d-flex gap-1">
+         <button class="btn btn-sm btn-outline-primary" onclick="editStudentEmail('${u.id}', '${u.name}', '${u.email || ''}')" title="メール設定">
+           <i class="bi bi-envelope-at"></i>
+         </button>
+         <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
+           <i class="bi bi-trash"></i>
+         </button>
+       </div>
+     </div>`;
+    }).join('');
   }
 
   function reloadRoster() {
@@ -860,6 +886,7 @@
   function addNewStudent() {
     const name = document.getElementById('new-student-name').value.trim();
     const ruby = document.getElementById('new-student-ruby').value.trim();
+    const email = document.getElementById('new-student-email')?.value.trim() || '';
     if (!name) {
       Swal.fire('名前を入力してください', '', 'warning');
       return;
@@ -867,17 +894,54 @@
 
     Swal.fire({ title: '追加中...', didOpen: () => Swal.showLoading() });
 
-    runGoogleScript('addStudent', name, ruby || '')
+    runGoogleScript('addStudent', name, ruby || '', email)
       .then(result => {
         if (result && result.success) {
           document.getElementById('new-student-name').value = '';
           document.getElementById('new-student-ruby').value = '';
+          const emailInput = document.getElementById('new-student-email');
+          if (emailInput) emailInput.value = '';
           Swal.fire({ icon: 'success', title: '追加しました', timer: 1000, showConfirmButton: false });
-          // 名簿を再読込
           reloadRoster();
         }
       })
       .catch(showError);
+  }
+
+  /**
+   * 児童のメールアドレスを編集（教師用）
+   */
+  function editStudentEmail(studentId, name, currentEmail) {
+    Swal.fire({
+      title: `${name}のメール設定`,
+      input: 'email',
+      inputLabel: 'Googleアカウントのメールアドレス',
+      inputValue: currentEmail,
+      inputPlaceholder: 'example@school.ed.jp',
+      showCancelButton: true,
+      confirmButtonText: '保存',
+      cancelButtonText: 'キャンセル',
+      inputValidator: (value) => {
+        // 空欄は許可（メール設定解除）
+        if (value && !value.includes('@')) {
+          return 'メールアドレスの形式が正しくありません';
+        }
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: '保存中...', didOpen: () => Swal.showLoading() });
+        runGoogleScript('updateStudentEmail', studentId, result.value || '')
+          .then(res => {
+            if (res && res.success) {
+              Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+              reloadRoster();
+            } else {
+              showError(res?.error || '保存に失敗しました');
+            }
+          })
+          .catch(showError);
+      }
+    });
   }
   /**
    * 名簿一括登録
@@ -887,11 +951,11 @@
       title: '名簿の一括登録',
       input: 'textarea',
       inputLabel: 'Excelやスプレッドシートからコピー＆ペーストしてください',
-      inputPlaceholder: '山田 太郎\tやまだ たろう\n佐藤 花子\tさとう はなこ',
+      inputPlaceholder: '山田 太郎\tやまだ たろう\ttaro@school.ed.jp\n佐藤 花子\tさとう はなこ\thanako@school.ed.jp',
       showCancelButton: true,
       confirmButtonText: '登録',
       cancelButtonText: 'キャンセル',
-      footer: '※1行に「名前 (タブ) ふりがな」の形式、または名前のみ',
+      footer: '※1行に「名前 (タブ) ふりがな (タブ) メール」の形式。メールは省略可。',
       preConfirm: (text) => {
         if (!text) return false;
         const lines = text.split('\n');
@@ -901,7 +965,8 @@
           if (parts.length > 0 && parts[0]) {
             students.push({
               name: parts[0].trim(),
-              ruby: parts[1] ? parts[1].trim() : ''
+              ruby: parts[1] ? parts[1].trim() : '',
+              email: parts[2] ? parts[2].trim() : ''
             });
           }
         });
@@ -2110,6 +2175,7 @@
     currentUser = null;
     currentSession = null;
     currentPhase = 'BEFORE';
+    isAutoLogin = false;
     if (scatterChart) {
       scatterChart.destroy();
       scatterChart = null;
@@ -2163,7 +2229,7 @@
             updatePhaseButtons(currentSession.phase || 'BEFORE');
           } else {
             currentSession = null;
-            updatePhaseButtons('CLOSED'); // デフォルト状態
+            updatePhaseButtons('CLOSED');
           }
           renderRoster(data.users);
           initChart();
@@ -2172,7 +2238,12 @@
           return;
         }
 
-        // 生徒用ロジック
+        // === 生徒用ロジック ===
+
+        // メール自動ログイン判定
+        const autoStudent = data.autoLoginStudent;
+
+        // ドロップダウンに名簿をセット（フォールバック用）
         const select = document.getElementById('student-select');
         if (data.users && Array.isArray(data.users) && data.users.length > 0) {
           select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
@@ -2184,12 +2255,7 @@
           });
         }
 
-        // 共通: ログイン状態の復元
-        const storedUid = localStorage.getItem('studentId');
-        if (storedUid) {
-          currentUser = { id: storedUid };
-        }
-
+        // セッション情報のセットアップ
         if (data.activeSession) {
           currentSession = data.activeSession;
           currentPhase = currentSession.phase || 'BEFORE';
@@ -2200,7 +2266,44 @@
           if (phaseLabel && phaseLabels[currentPhase]) {
             phaseLabel.innerHTML = phaseLabels[currentPhase];
           }
+        }
 
+        // --- 自動ログイン処理 ---
+        if (autoStudent) {
+          isAutoLogin = true;
+          localStorage.setItem('studentId', autoStudent.id);
+
+          // 自動ログインメッセージを表示
+          const autoMsg = document.getElementById('auto-login-msg');
+          const manualForm = document.getElementById('manual-login-form');
+          const autoName = document.getElementById('auto-login-name');
+          if (autoMsg) autoMsg.classList.remove('d-none');
+          if (manualForm) manualForm.classList.add('d-none');
+          if (autoName) autoName.textContent = autoStudent.name;
+
+          showView('view-login');
+
+          // 少しだけ表示してから自動遷移
+          setTimeout(() => {
+            login(autoStudent.id);
+          }, 800);
+          return;
+        }
+
+        // --- フォールバック: 手動ログイン ---
+        isAutoLogin = false;
+        const autoMsg = document.getElementById('auto-login-msg');
+        const manualForm = document.getElementById('manual-login-form');
+        if (autoMsg) autoMsg.classList.add('d-none');
+        if (manualForm) manualForm.classList.remove('d-none');
+
+        // localStorage からの復元
+        const storedUid = localStorage.getItem('studentId');
+        if (storedUid) {
+          currentUser = { id: storedUid };
+        }
+
+        if (currentSession) {
           if (storedUid) {
             if (currentPhase === 'AFTER') {
               showReflectionView();
@@ -2211,34 +2314,9 @@
             showView('view-login');
           }
         } else {
-          // セッションがない場合
           if (storedUid) {
-            showView('view-waiting'); // ログイン済みなら待機画面へ（ここからポートフォリオが見れる）
+            showView('view-waiting');
           } else {
-            showView('view-login'); // 未ログインならログイン画面へ（本来は待機画面でいいが、名前を選ばせたいならLoginへ。しかしSessionがないとLoginしても進めない...いや、LoginだけさせてWaitingに行かせればいい）
-            // 修正案: Sessionがないときは Login画面で名前を選ばせても、始まらないので意味がない？
-            // いや、名前を選んで「授業を始める」ボタンを押しても、Sessionがないとエラーになるか、Waitingに行くだけ。
-            // 待機画面に「ログイン」ボタンはない。
-            // したがって、Sessionがないときは「ログイン画面」を表示し、名前を選んでボタンを押したら「currentUserをセットしてWaiting画面へ」というフローが必要。
-
-            // 現状の login() 関数は activeSession を前提としているか確認が必要。
-            // login() 関数を見ると:
-            //   if (!currentSession) { Alert('授業が始まっていません'); return; }
-            // となっている。これではSessionがないときにログインできない。
-
-            // 対策: Sessionがなくてもログイン（名札選択）できるようにする、または
-            // ポートフォリオを見るためには「誰か」を特定する必要がある。
-            // Sessionがない状態でポートフォリオを見るには？
-            // view-login で名前を選ばせる -> ポートフォリオボタンを押す -> currentUserセット -> showMyLog
-            // あるいは、view-waiting に「名前を選ぶ」機能をつけるか。
-
-            // 今回はシンプルに:
-            // 1. storedUid があれば view-waiting (ポートフォリオボタンあり)
-            // 2. なければ view-login (ただし login() は Session必須なので、ポートフォリオ専用のログインフローが必要？)
-            // いや、login() のチェックを緩和すればいい。
-
-            // とりあえずここは storedUid がなければ view-login に飛ばす。
-            // login() の修正も必要。
             showView('view-login');
           }
         }

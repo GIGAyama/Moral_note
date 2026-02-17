@@ -39,30 +39,38 @@
       2. ログイン画面 (LOGIN VIEW)
       =================================================================
     -->
-    <div id="view-login" class="d-none text-center fade-in">
-      <div class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Loading...</span>
-      </div>
-      <p class="mt-2 text-muted">
-        <ruby>準備中<rt>じゅんびちゅう</rt></ruby>...<br>
-        <small class="text-muted" style="font-size: 0.8rem;">(最初や復旧時は少し時間がかかります)</small>
-      </p>
-    </div>
-
-    <!-- View: Login -->
+    <!-- View: Login (auto-login or manual select) -->
     <div id="view-login" class="d-none text-center fade-in student-view-container">
-      <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
-        <div class="card-body text-center p-4">
-          <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選
-              <rt>えら</rt>
-            </ruby>んでね</h3>
-          <select id="student-select" class="form-select form-select-lg mb-4 py-3 fs-3" style="font-size: 1.5rem;">
-            <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
-            <!-- JSで動的生成 -->
-          </select>
-          <button class="btn btn-primary btn-lg w-100" onclick="login()">
-            <ruby>授業<rt>じゅぎょう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>める
-          </button>
+      <!-- Auto-login message (shown during auto-login) -->
+      <div id="auto-login-msg" class="d-none">
+        <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
+          <div class="card-body text-center p-4">
+            <i class="bi bi-person-check-fill text-success" style="font-size: 4rem;"></i>
+            <h3 class="card-title mt-3 mb-2 fw-bold text-primary" style="font-size: 2rem;">
+              <span id="auto-login-name"></span>さん
+            </h3>
+            <p class="text-muted fs-4 mb-4">
+              <ruby>自動<rt>じどう</rt></ruby>ログインしました
+            </p>
+            <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Manual login (fallback when auto-login is not available) -->
+      <div id="manual-login-form">
+        <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
+          <div class="card-body text-center p-4">
+            <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選
+                <rt>えら</rt>
+              </ruby>んでね</h3>
+            <select id="student-select" class="form-select form-select-lg mb-4 py-3 fs-3" style="font-size: 1.5rem;">
+              <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
+              <!-- JSで動的生成 -->
+            </select>
+            <button class="btn btn-primary btn-lg w-100" onclick="login()">
+              <ruby>授業<rt>じゅぎょう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>める
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -130,7 +138,7 @@
               <i class="bi bi-people-fill me-2"></i> みんなの<ruby>考<rt>かんが</rt></ruby>えを<ruby>見<rt>み</rt></ruby>る
             </button>
 
-            <a href="#" class="text-muted d-block mt-2" style="font-size: 1.1rem;"
+            <a href="#" class="text-muted d-block mt-2" id="btn-logout-student" style="font-size: 1.1rem;"
               onclick="logoutStudent(); return false;">
               <i class="bi bi-arrow-left"></i> <ruby>名前<rt>なまえ</rt></ruby>を<ruby>変<rt>か</rt></ruby>える
             </a>
@@ -484,14 +492,25 @@
 
               <!-- Tab: 名簿管理 -->
               <div class="tab-pane fade" id="content-roster" role="tabpanel">
+                <div class="alert alert-info small mb-3">
+                  <i class="bi bi-info-circle me-1"></i>
+                  児童のGoogleアカウント（メールアドレス）を登録すると、自動ログインが有効になります。
+                </div>
                 <div id="roster-list" class="list-group list-group-flush border rounded mb-3"
                   style="max-height: 400px; overflow-y: auto;">
                   <!-- JS populated -->
                 </div>
                 <div class="bg-light rounded p-3">
-                  <div class="input-group input-group-sm mb-2">
-                    <input type="text" class="form-control" id="new-student-name" placeholder="名前">
-                    <input type="text" class="form-control" id="new-student-ruby" placeholder="ふりがな">
+                  <div class="row g-2 mb-2">
+                    <div class="col-4">
+                      <input type="text" class="form-control form-control-sm" id="new-student-name" placeholder="名前">
+                    </div>
+                    <div class="col-3">
+                      <input type="text" class="form-control form-control-sm" id="new-student-ruby" placeholder="ふりがな">
+                    </div>
+                    <div class="col-5">
+                      <input type="email" class="form-control form-control-sm" id="new-student-email" placeholder="メールアドレス（任意）">
+                    </div>
                   </div>
                   <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-success flex-grow-1" onclick="addNewStudent()">
