@@ -17,8 +17,33 @@ const SCRIPT_PROP = PropertiesService.getScriptProperties();
 // Gemini API設定 (APIキーは「先生用ダッシュボード」の設定画面から入力します)
 const GEMINI_API_KEY = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
 
-// 認証設定 (デフォルトパスワード)
+// 認証設定
 const DEFAULT_TEACHER_PASSWORD = "admin";
+const MAX_LOGIN_ATTEMPTS = 5;         // 最大試行回数
+const LOCKOUT_DURATION_MIN = 10;      // ロックアウト時間（分）
+
+// =================================================================
+// 1b. バリデーション (VALIDATION)
+// =================================================================
+const MAX_NAME_LENGTH = 50;
+const MAX_TEXT_LENGTH = 1000;
+const MAX_VALUE_LENGTH = 5000;
+
+function sanitizeText(text) {
+  if (!text) return '';
+  return String(text).replace(/<[^>]*>/g, '').substring(0, MAX_TEXT_LENGTH);
+}
+
+function validateStudentName(name) {
+  if (!name || typeof name !== 'string') return false;
+  const trimmed = name.trim();
+  return trimmed.length > 0 && trimmed.length <= MAX_NAME_LENGTH;
+}
+
+function validateEmail(email) {
+  if (!email) return true; // 空はOK
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
+}
 
 // =================================================================
 // 2. コア機能 (CORE FUNCTIONS)
@@ -120,12 +145,12 @@ function setupSheets(ss) {
   let userSheet = ss.getSheetByName('名簿');
   if (!userSheet) {
     userSheet = ss.insertSheet('名簿');
-    userSheet.getRange(1, 1, 1, 4).setValues([['studentId', 'name', 'ruby', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
+    userSheet.getRange(1, 1, 1, 5).setValues([['studentId', 'name', 'ruby', 'deletedAt', 'email']]).setBackground('#e8eaed').setFontWeight('bold');
     // デモデータ
-    userSheet.getRange(2, 1, 3, 4).setValues([
-      ['s001', '佐藤 健太', 'さとう けんた', ''],
-      ['s002', '鈴木 愛', 'すずき あい', ''],
-      ['s003', '高橋 翔', 'たかはし かける', '']
+    userSheet.getRange(2, 1, 3, 5).setValues([
+      ['s001', '佐藤 健太', 'さとう けんた', '', ''],
+      ['s002', '鈴木 愛', 'すずき あい', '', ''],
+      ['s003', '高橋 翔', 'たかはし かける', '', '']
     ]);
   }
 
@@ -172,15 +197,33 @@ function setupSheets(ss) {
  */
 function getInitialData() {
   try {
-    const ss = getDB(); 
-    
+    const ss = getDB();
+
+    // アクセス中のユーザーのメールアドレスを取得
+    let callerEmail = '';
+    try {
+      callerEmail = Session.getActiveUser().getEmail() || '';
+    } catch (e) {
+      console.warn('Could not get active user email:', e);
+    }
+
     // 名簿取得
     const userSheet = ss.getSheetByName('名簿');
     let users = [];
+    let autoLoginStudent = null;
     if (userSheet && userSheet.getLastRow() > 1) {
-      users = userSheet.getDataRange().getValues().slice(1)
-        .filter(r => !r[3]) // deletedAtがないもの
-        .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
+      const rows = userSheet.getDataRange().getValues().slice(1)
+        .filter(r => !r[3]); // deletedAtがないもの
+
+      users = rows.map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+
+      // メールアドレスで自動照合
+      if (callerEmail) {
+        const matched = rows.find(r => r[4] && String(r[4]).toLowerCase().trim() === callerEmail.toLowerCase().trim());
+        if (matched) {
+          autoLoginStudent = { id: matched[0], name: matched[1], ruby: matched[2] };
+        }
+      }
     }
 
     // アクティブな授業を取得
@@ -206,7 +249,13 @@ function getInitialData() {
       if (sessions.length > 0) activeSession = sessions[0];
     }
 
-    return { success: true, users: users, activeSession: activeSession };
+    return {
+      success: true,
+      users: users,
+      activeSession: activeSession,
+      autoLoginStudent: autoLoginStudent,
+      callerEmail: callerEmail
+    };
 
   } catch (e) {
     console.error(e);
@@ -331,11 +380,17 @@ function createSession(title, inputType, optionsJson) {
 /**
  * 名簿に生徒を1名追加します
  */
-function addStudent(name, ruby) {
+function addStudent(name, ruby, email) {
+  if (!validateStudentName(name)) {
+    return { success: false, error: '名前は1〜50文字で入力してください' };
+  }
+  if (email && !validateEmail(email)) {
+    return { success: false, error: 'メールアドレスの形式が正しくありません' };
+  }
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss');
-  sheet.appendRow([studentId, name, ruby, '']);
+  sheet.appendRow([studentId, sanitizeText(name).trim(), sanitizeText(ruby).trim(), '', (email || '').trim()]);
   return { success: true, id: studentId };
 }
 
@@ -347,18 +402,18 @@ function addStudentBulk(students) {
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   if (!sheet) return { success: false, error: '名簿シートが見つかりません' };
-  
+
   const rows = students.map((s, i) => {
     // ユニークID生成 (タイムスタンプ + インデックスで重複回避)
     const suffix = ('000' + i).slice(-3);
     const studentId = 's' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMddHHmmss') + suffix;
-    return [studentId, s.name, s.ruby, ''];
+    return [studentId, s.name, s.ruby, '', s.email || ''];
   });
-  
+
   if (rows.length > 0) {
     sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   }
-  
+
   return { success: true, count: rows.length };
 }
 
@@ -389,9 +444,26 @@ function getStudents() {
 
   const users = userSheet.getDataRange().getValues().slice(1)
     .filter(r => !r[3]) // deletedAt
-    .map(r => ({ id: r[0], name: r[1], ruby: r[2] }));
-    
+    .map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+
   return { success: true, users: users };
+}
+
+/**
+ * 児童のメールアドレスを更新します（教師用）
+ */
+function updateStudentEmail(studentId, email) {
+  const ss = getDB();
+  const sheet = ss.getSheetByName('名簿');
+  const data = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < data.length; i++) {
+    if (data[i][0] === studentId && !data[i][3]) {
+      sheet.getRange(i + 1, 5).setValue(email || '');
+      return { success: true };
+    }
+  }
+  return { success: false, error: '生徒が見つかりません' };
 }
 
 // =================================================================
@@ -400,20 +472,55 @@ function getStudents() {
 
 /**
  * 生徒からの回答ログを保存します
+ * サーバーサイドでメールアドレス検証を行い、なりすましを防止します
  */
 function submitLog(data) {
   const ss = getDB();
-  const sheet = ss.getSheetByName('記録');
+
+  // メールアドレスによる本人確認
+  let callerEmail = '';
+  try {
+    callerEmail = Session.getActiveUser().getEmail() || '';
+  } catch (e) { }
+
+  if (callerEmail) {
+    const userSheet = ss.getSheetByName('名簿');
+    if (userSheet && userSheet.getLastRow() > 1) {
+      const rows = userSheet.getDataRange().getValues().slice(1);
+      const student = rows.find(r => r[0] === data.studentId && !r[3]);
+      if (student && student[4] && String(student[4]).toLowerCase().trim() !== callerEmail.toLowerCase().trim()) {
+        return { success: false, error: '認証エラー: 自分のアカウントでログインしてください' };
+      }
+    }
+  }
+
+  // 入力値バリデーション
+  if (!data.sessionId || !data.studentId || !data.phase) {
+    return { success: false, error: '必須パラメータが不足しています' };
+  }
+  const safeText = sanitizeText(data.text);
+  const safeValue = String(data.value || '').substring(0, MAX_VALUE_LENGTH);
+
+  // 重複送信チェック
+  const logSheet = ss.getSheetByName('記録');
+  if (logSheet && logSheet.getLastRow() > 1) {
+    const existing = logSheet.getDataRange().getValues().slice(1)
+      .find(r => r[1] === data.sessionId && r[2] === data.studentId && r[3] === data.phase && !r[7]);
+    if (existing) {
+      return { success: false, error: 'すでにこのフェーズで送信済みです', duplicate: true };
+    }
+  }
+
   const logId = Utilities.getUuid();
   const timestamp = new Date();
-  
-  sheet.appendRow([
+
+  logSheet.appendRow([
     logId,
     data.sessionId,
     data.studentId,
     data.phase,
-    data.value,
-    data.text,
+    safeValue,
+    safeText,
     timestamp,
     ''
   ]);
@@ -861,6 +968,58 @@ function hasGeminiApiKey() {
 // =================================================================
 
 /**
+ * 授業データをCSV形式で取得（教師用エクスポート）
+ */
+function exportSessionCsv(sessionId) {
+  const ss = getDB();
+
+  // 授業情報
+  const sessionSheet = ss.getSheetByName('授業');
+  const sessionRow = sessionSheet.getDataRange().getValues().slice(1).find(r => r[0] === sessionId);
+  if (!sessionRow) return { success: false, error: '授業が見つかりません' };
+  const sessionTitle = sessionRow[2];
+  const inputType = sessionRow[3];
+
+  // 名簿マップ
+  const userSheet = ss.getSheetByName('名簿');
+  const users = {};
+  if (userSheet && userSheet.getLastRow() > 1) {
+    userSheet.getDataRange().getValues().slice(1)
+      .filter(r => !r[3])
+      .forEach(r => { users[r[0]] = { name: r[1], ruby: r[2] }; });
+  }
+
+  // ログ取得
+  const logSheet = ss.getSheetByName('記録');
+  const logs = logSheet.getDataRange().getValues().slice(1)
+    .filter(r => r[1] === sessionId && !r[7]);
+
+  // 児童ごとにグルーピング
+  const grouped = {};
+  logs.forEach(r => {
+    const sid = r[2];
+    if (!grouped[sid]) grouped[sid] = {};
+    grouped[sid][r[3]] = { value: r[4], text: r[5] };
+  });
+
+  // CSV組み立て
+  const rows = [['名前', 'ふりがな', '導入_値', '導入_理由', '振り返り_値', '振り返り_理由']];
+  Object.keys(grouped).forEach(sid => {
+    const u = users[sid] || { name: sid, ruby: '' };
+    const b = grouped[sid]['BEFORE'] || {};
+    const a = grouped[sid]['AFTER'] || {};
+    rows.push([
+      u.name, u.ruby,
+      String(b.value || ''), String(b.text || ''),
+      String(a.value || ''), String(a.text || '')
+    ]);
+  });
+
+  const csv = rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  return { success: true, csv: csv, title: sessionTitle, inputType: inputType };
+}
+
+/**
  * 全授業セッション一覧を取得（履歴表示用）
  */
 function getAllSessions() {
@@ -957,12 +1116,54 @@ ${historyText}
 }
 
 /**
- * 教師用パスワードの照合
+ * 教師用パスワードの照合（試行回数制限付き）
  */
 function checkTeacherPassword(password) {
+  const cache = CacheService.getScriptCache();
+  const lockKey = 'TEACHER_LOGIN_LOCK';
+  const attemptKey = 'TEACHER_LOGIN_ATTEMPTS';
+
+  // ロックアウト確認
+  const locked = cache.get(lockKey);
+  if (locked) {
+    return { success: false, error: 'ログイン試行回数の上限に達しました。しばらく待ってから再試行してください。', locked: true };
+  }
+
   const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
   const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
-  return { success: (password === correctPass) };
+  const isDefault = !setPass || setPass === DEFAULT_TEACHER_PASSWORD;
+
+  if (password === correctPass) {
+    // 成功: 試行カウントをリセット
+    cache.remove(attemptKey);
+    return { success: true, requirePasswordChange: isDefault };
+  }
+
+  // 失敗: 試行回数をインクリメント
+  let attempts = parseInt(cache.get(attemptKey) || '0') + 1;
+  if (attempts >= MAX_LOGIN_ATTEMPTS) {
+    cache.put(lockKey, 'true', LOCKOUT_DURATION_MIN * 60);
+    cache.remove(attemptKey);
+    return { success: false, error: `${MAX_LOGIN_ATTEMPTS}回連続で失敗しました。${LOCKOUT_DURATION_MIN}分間ロックされます。`, locked: true };
+  }
+  cache.put(attemptKey, String(attempts), 600); // 10分間保持
+  return { success: false, error: `パスワードが違います（残り${MAX_LOGIN_ATTEMPTS - attempts}回）` };
+}
+
+/**
+ * 教師用パスワードの変更
+ */
+function changeTeacherPassword(currentPass, newPass) {
+  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
+  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
+  if (currentPass !== correctPass) {
+    return { success: false, error: '現在のパスワードが違います' };
+  }
+  if (!newPass || newPass.length < 4) {
+    return { success: false, error: 'パスワードは4文字以上にしてください' };
+  }
+  SCRIPT_PROP.setProperty('TEACHER_PASSWORD', newPass);
+  return { success: true };
 }
 
 

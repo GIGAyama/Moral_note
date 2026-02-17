@@ -39,30 +39,38 @@
       2. ログイン画面 (LOGIN VIEW)
       =================================================================
     -->
-    <div id="view-login" class="d-none text-center fade-in">
-      <div class="spinner-border text-primary" role="status">
-        <span class="visually-hidden">Loading...</span>
-      </div>
-      <p class="mt-2 text-muted">
-        <ruby>準備中<rt>じゅんびちゅう</rt></ruby>...<br>
-        <small class="text-muted" style="font-size: 0.8rem;">(最初や復旧時は少し時間がかかります)</small>
-      </p>
-    </div>
-
-    <!-- View: Login -->
+    <!-- View: Login (auto-login or manual select) -->
     <div id="view-login" class="d-none text-center fade-in student-view-container">
-      <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
-        <div class="card-body text-center p-4">
-          <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選
-              <rt>えら</rt>
-            </ruby>んでね</h3>
-          <select id="student-select" class="form-select form-select-lg mb-4 py-3 fs-3" style="font-size: 1.5rem;">
-            <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
-            <!-- JSで動的生成 -->
-          </select>
-          <button class="btn btn-primary btn-lg w-100" onclick="login()">
-            <ruby>授業<rt>じゅぎょう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>める
-          </button>
+      <!-- Auto-login message (shown during auto-login) -->
+      <div id="auto-login-msg" class="d-none">
+        <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
+          <div class="card-body text-center p-4">
+            <i class="bi bi-person-check-fill text-success" style="font-size: 4rem;"></i>
+            <h3 class="card-title mt-3 mb-2 fw-bold text-primary" style="font-size: 2rem;">
+              <span id="auto-login-name"></span>さん
+            </h3>
+            <p class="text-muted fs-4 mb-4">
+              <ruby>自動<rt>じどう</rt></ruby>ログインしました
+            </p>
+            <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+          </div>
+        </div>
+      </div>
+      <!-- Manual login (fallback when auto-login is not available) -->
+      <div id="manual-login-form">
+        <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
+          <div class="card-body text-center p-4">
+            <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選
+                <rt>えら</rt>
+              </ruby>んでね</h3>
+            <select id="student-select" class="form-select form-select-lg mb-4 py-3 fs-3" style="font-size: 1.5rem;">
+              <option value="" selected disabled>ここをタップして<ruby>選<rt>えら</rt></ruby>ぶ</option>
+              <!-- JSで動的生成 -->
+            </select>
+            <button class="btn btn-primary btn-lg w-100" onclick="login()">
+              <ruby>授業<rt>じゅぎょう</rt></ruby>を<ruby>始<rt>はじ</rt></ruby>める
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -115,7 +123,11 @@
           <!-- Reason Input -->
           <div class="mb-4">
             <label class="form-label fs-4"><ruby>理由<rt>りゆう</rt></ruby>や<ruby>考<rt>かんが</rt></ruby>え</label>
-            <textarea class="form-control fs-4 p-3" id="input-text" rows="3" placeholder="どうしてそう思ったの？"></textarea>
+            <textarea class="form-control fs-4 p-3" id="input-text" rows="3" maxlength="500"
+              placeholder="どうしてそう思ったの？" oninput="updateCharCount(this, 'char-count-entry')"></textarea>
+            <div class="text-end mt-1">
+              <small class="text-muted" id="char-count-entry">0 / 500</small>
+            </div>
           </div>
 
           <!-- Submit Button -->
@@ -130,7 +142,7 @@
               <i class="bi bi-people-fill me-2"></i> みんなの<ruby>考<rt>かんが</rt></ruby>えを<ruby>見<rt>み</rt></ruby>る
             </button>
 
-            <a href="#" class="text-muted d-block mt-2" style="font-size: 1.1rem;"
+            <a href="#" class="text-muted d-block mt-2" id="btn-logout-student" style="font-size: 1.1rem;"
               onclick="logoutStudent(); return false;">
               <i class="bi bi-arrow-left"></i> <ruby>名前<rt>なまえ</rt></ruby>を<ruby>変<rt>か</rt></ruby>える
             </a>
@@ -190,8 +202,11 @@
           <!-- Reason (Reflection) -->
           <div class="mb-4">
             <label class="form-label fs-4"><ruby>変<rt>か</rt></ruby>わった<ruby>理由<rt>りゆう</rt></ruby>は？</label>
-            <textarea class="form-control fs-4 p-3" id="reflection-text" rows="3"
-              placeholder="友達の話を聞いて、どう思った？"></textarea>
+            <textarea class="form-control fs-4 p-3" id="reflection-text" rows="3" maxlength="500"
+              placeholder="友達の話を聞いて、どう思った？" oninput="updateCharCount(this, 'char-count-reflect')"></textarea>
+            <div class="text-end mt-1">
+              <small class="text-muted" id="char-count-reflect">0 / 500</small>
+            </div>
           </div>
 
           <button class="btn btn-success w-100 btn-lg shadow py-3 fs-2 fw-bold" onclick="submitReflection()">
@@ -419,9 +434,14 @@
                     </div>
                   </div>
                   <div class="col-md-7">
-                    <div class="card border">
-                      <div class="card-header bg-white py-2">
-                        <small class="fw-bold">編集・詳細</small>
+                    <div class="card border" id="unit-edit-card">
+                      <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+                        <small class="fw-bold" id="unit-form-header">
+                          <i class="bi bi-plus-circle me-1"></i>新規作成
+                        </small>
+                        <button class="btn btn-sm btn-outline-secondary d-none" id="btn-cancel-edit" onclick="clearUnitForm()">
+                          <i class="bi bi-x-lg me-1"></i>新規に戻る
+                        </button>
                       </div>
                       <div class="card-body">
                         <input type="hidden" id="edit-unit-id">
@@ -474,7 +494,9 @@
                           placeholder="指導メモ"></textarea>
                         <div class="d-flex justify-content-end gap-2">
                           <button class="btn btn-sm btn-outline-secondary" onclick="clearUnitForm()">クリア</button>
-                          <button class="btn btn-sm btn-primary" onclick="saveUnitForm()">保存</button>
+                          <button class="btn btn-sm btn-primary" id="btn-save-unit" onclick="saveUnitForm()">
+                            <i class="bi bi-save me-1"></i>保存
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -484,14 +506,25 @@
 
               <!-- Tab: 名簿管理 -->
               <div class="tab-pane fade" id="content-roster" role="tabpanel">
+                <div class="alert alert-info small mb-3">
+                  <i class="bi bi-info-circle me-1"></i>
+                  児童のGoogleアカウント（メールアドレス）を登録すると、自動ログインが有効になります。
+                </div>
                 <div id="roster-list" class="list-group list-group-flush border rounded mb-3"
                   style="max-height: 400px; overflow-y: auto;">
                   <!-- JS populated -->
                 </div>
                 <div class="bg-light rounded p-3">
-                  <div class="input-group input-group-sm mb-2">
-                    <input type="text" class="form-control" id="new-student-name" placeholder="名前">
-                    <input type="text" class="form-control" id="new-student-ruby" placeholder="ふりがな">
+                  <div class="row g-2 mb-2">
+                    <div class="col-4">
+                      <input type="text" class="form-control form-control-sm" id="new-student-name" placeholder="名前">
+                    </div>
+                    <div class="col-3">
+                      <input type="text" class="form-control form-control-sm" id="new-student-ruby" placeholder="ふりがな">
+                    </div>
+                    <div class="col-5">
+                      <input type="email" class="form-control form-control-sm" id="new-student-email" placeholder="メールアドレス（任意）">
+                    </div>
                   </div>
                   <div class="d-flex gap-2">
                     <button class="btn btn-sm btn-outline-success flex-grow-1" onclick="addNewStudent()">
@@ -512,7 +545,12 @@
                   <button class="btn btn-outline-secondary" onclick="saveApiKey()">保存</button>
                 </div>
                 <p class="text-muted status-text small mb-0" id="gemini-status">Status: Checking...</p>
-                <hr class="my-4">
+                <hr class="my-3">
+                <label class="form-label small fw-bold">教師パスワード</label>
+                <button class="btn btn-outline-primary btn-sm w-100 mb-3" onclick="promptPasswordChange()">
+                  <i class="bi bi-key me-1"></i> パスワードを変更
+                </button>
+                <hr class="my-3">
                 <div class="d-grid gap-2">
                   <button class="btn btn-outline-danger btn-sm"
                     onclick="if(confirm('全てのデータをリセットしますか？')) { /* TODO */ }">
@@ -612,12 +650,17 @@
 
               <!-- Tab: 単元別履歴 -->
               <div class="tab-pane fade show active" id="content-history-unit" role="tabpanel">
-                <div class="mb-3">
-                  <label class="form-label small text-muted">実施済み授業を選択</label>
-                  <select class="form-select" id="history-session-select"
-                    onchange="loadSessionHistory(this.value)">
-                    <option value="">-- 授業を選んでください --</option>
-                  </select>
+                <div class="mb-3 d-flex gap-2 align-items-end">
+                  <div class="flex-grow-1">
+                    <label class="form-label small text-muted">実施済み授業を選択</label>
+                    <select class="form-select" id="history-session-select"
+                      onchange="loadSessionHistory(this.value)">
+                      <option value="">-- 授業を選んでください --</option>
+                    </select>
+                  </div>
+                  <button class="btn btn-outline-success btn-sm d-none" id="btn-export-csv" onclick="exportCsv()">
+                    <i class="bi bi-download me-1"></i>CSV
+                  </button>
                 </div>
                 <div id="history-session-detail">
                   <div class="text-center text-muted py-5">
@@ -740,7 +783,7 @@
   </div>
 
   <!-- Footer -->
-  <footer class="text-center text-muted py-3 mt-4 border-top fixed-bottom bg-white">
+  <footer class="text-center text-muted py-3 mt-4 border-top bg-white">
     <small>© 2026 こころスコープ <a href="https://note.com/cute_borage86" target="_blank"
         class="text-decoration-none text-muted">GIGA山</a></small>
   </footer>

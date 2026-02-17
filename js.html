@@ -10,6 +10,7 @@
   let scatterChart = null;     // 教師用: 散布図チャートインスタンス
   let loadingTimeout = null;   // 読み込み監視用タイマー
   let isPageVisible = true;    // ブラウザタブの表示状態（ポーリング制御用）
+  let isAutoLogin = false;     // メールアドレス自動ログインフラグ
 
   // Google Drive Picker State
   let pickerModal = null;
@@ -55,6 +56,19 @@
   });
 
   /**
+   * UI Helpers
+   */
+  function updateCharCount(textarea, counterId) {
+    const counter = document.getElementById(counterId);
+    if (counter) {
+      const len = textarea.value.length;
+      const max = textarea.maxLength || 500;
+      counter.textContent = `${len} / ${max}`;
+      counter.classList.toggle('text-danger', len >= max);
+    }
+  }
+
+  /**
    * UI Logic (Safe Transition)
    */
   function showView(viewId) {
@@ -80,16 +94,25 @@
    * 4. 生徒用機能 (STUDENT FUNCTIONS)
    * =================================================================
    */
-  function login() {
-    const select = document.getElementById('student-select');
-    const uid = select.value;
+  function login(autoUid) {
+    let uid = autoUid;
     if (!uid) {
-      Swal.fire('名前を選んでね', '', 'warning');
-      return;
+      const select = document.getElementById('student-select');
+      uid = select.value;
+      if (!uid) {
+        Swal.fire('名前を選んでね', '', 'warning');
+        return;
+      }
     }
 
     localStorage.setItem('studentId', uid);
     currentUser = { id: uid };
+
+    // 自動ログイン時は「名前を変える」リンクを非表示
+    const btnLogout = document.getElementById('btn-logout-student');
+    if (btnLogout) {
+      btnLogout.classList.toggle('d-none', isAutoLogin);
+    }
 
     // 授業有無で分岐
     if (currentSession) {
@@ -359,8 +382,11 @@
       });
   }
 
+  let isSubmitting = false; // 二重送信防止フラグ
+
   function submitOpinion() {
     if (!currentUser || !currentSession) return;
+    if (isSubmitting) return; // 二重送信防止
 
     const text = document.getElementById('input-text').value;
 
@@ -380,35 +406,66 @@
       text: text
     };
 
-    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+    // ボタン無効化
+    isSubmitting = true;
+    const submitBtn = document.querySelector('#view-entry .btn-primary[onclick="submitOpinion()"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 送信中...';
+    }
 
     runGoogleScript('submitLog', payload)
-      .then(() => {
-        Swal.fire({
-          icon: 'success',
-          title: '送りました！',
-          text: '友達の意見も見てみよう',
-          timer: 1500,
-          showConfirmButton: false
-        });
+      .then((result) => {
+        if (result && !result.success && result.duplicate) {
+          Swal.fire({ icon: 'info', title: 'もう送信済みだよ', text: '友達の意見を見てみよう', timer: 2000, showConfirmButton: false });
+        } else if (result && !result.success) {
+          Swal.fire({ icon: 'error', title: 'エラー', text: result.error });
+          // エラー時はボタンを復活
+          isSubmitting = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+          }
+          return;
+        } else {
+          Swal.fire({
+            icon: 'success',
+            title: '送りました！',
+            text: '友達の意見も見てみよう',
+            timer: 1500,
+            showConfirmButton: false
+          });
+        }
 
-        // 全パターン対応: 対話モード表示
+        // 送信成功後の処理
         showDialogueMode(val);
 
-        // 送信後: みんなの考えボタンを表示
         const btnOpinion = document.getElementById('btn-opinion-share');
         if (btnOpinion) btnOpinion.classList.remove('d-none');
 
-        // フォームリセット
+        // 送信ボタンを「送信済み」状態に
+        if (submitBtn) {
+          submitBtn.innerHTML = '<i class="bi bi-check-circle-fill me-2"></i> 送信済み';
+          submitBtn.classList.remove('btn-primary');
+          submitBtn.classList.add('btn-secondary');
+        }
+
         document.getElementById('input-text').value = '';
 
-        // AIフィードバックを非同期で取得
+        // AIフィードバック
         document.getElementById('ai-feedback-card').classList.add('d-none');
         if (currentSession) {
           requestAiFeedback(currentSession.title, text, currentSession.inputType, val);
         }
       })
-      .catch(showError);
+      .catch(err => {
+        isSubmitting = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+        }
+        showError(err);
+      });
   }
 
   /**
@@ -420,6 +477,10 @@
   }
 
   function logoutStudent() {
+    if (isAutoLogin) {
+      Swal.fire('自動ログイン中', 'Googleアカウントで自動ログインしているため、名前を変更できません。', 'info');
+      return;
+    }
     localStorage.removeItem('studentId');
     currentUser = null;
     showView('view-login');
@@ -433,13 +494,11 @@
         logoutTeacher();
       }
     } else {
-      // サーバーサイド認証
+      // サーバーサイド認証（試行回数制限付き）
       Swal.fire({
         title: '先生用パスワード',
         input: 'password',
-        inputAttributes: {
-          autocapitalize: 'off'
-        },
+        inputAttributes: { autocapitalize: 'off' },
         showCancelButton: true,
         confirmButtonText: 'ログイン',
         showLoaderOnConfirm: true,
@@ -447,24 +506,62 @@
           return runGoogleScript('checkTeacherPassword', pass)
             .then(result => {
               if (!result.success) {
-                throw new Error('パスワードが違います');
+                throw new Error(result.error || 'パスワードが違います');
               }
-              return true;
+              return result;
             })
             .catch(error => {
-              Swal.showValidationMessage(
-                `ログイン失敗: ${error}`
-              )
-            })
+              Swal.showValidationMessage(`${error}`);
+            });
         },
         allowOutsideClick: () => !Swal.isLoading()
       }).then((result) => {
         if (result.isConfirmed) {
           localStorage.setItem('isTeacher', 'true');
-          resetApp(); // リロードせずにモード切替
+          // デフォルトパスワードの場合は変更を促す
+          if (result.value && result.value.requirePasswordChange) {
+            promptPasswordChange();
+          } else {
+            resetApp();
+          }
         }
       })
     }
+  }
+
+  function promptPasswordChange() {
+    Swal.fire({
+      title: 'パスワードを変更してください',
+      html: '<p class="small text-muted">セキュリティのため、デフォルトパスワードから変更してください。</p>' +
+        '<input type="password" id="swal-new-pass" class="swal2-input" placeholder="新しいパスワード（4文字以上）">' +
+        '<input type="password" id="swal-new-pass-confirm" class="swal2-input" placeholder="もう一度入力">',
+      showCancelButton: true,
+      confirmButtonText: '変更する',
+      cancelButtonText: 'あとで変更',
+      preConfirm: () => {
+        const newPass = document.getElementById('swal-new-pass').value;
+        const confirm = document.getElementById('swal-new-pass-confirm').value;
+        if (!newPass || newPass.length < 4) {
+          Swal.showValidationMessage('4文字以上で入力してください');
+          return false;
+        }
+        if (newPass !== confirm) {
+          Swal.showValidationMessage('パスワードが一致しません');
+          return false;
+        }
+        return runGoogleScript('changeTeacherPassword', 'admin', newPass)
+          .then(result => {
+            if (!result.success) throw new Error(result.error);
+            return true;
+          })
+          .catch(err => { Swal.showValidationMessage(String(err)); });
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ icon: 'success', title: 'パスワードを変更しました', timer: 1500, showConfirmButton: false });
+      }
+      resetApp();
+    });
   }
 
   function toggleSessionOptions() {
@@ -718,10 +815,9 @@
 
   function submitReflection() {
     if (!currentUser || !currentSession) return;
+    if (isSubmitting) return;
 
     const text = document.getElementById('reflection-text').value;
-
-    // PatternRendererから値取得
     const val = patternRenderer.getValue();
 
     if (val === null || val === '') {
@@ -737,19 +833,43 @@
       text: text
     };
 
-    Swal.fire({ title: '送信中...', didOpen: () => Swal.showLoading() });
+    isSubmitting = true;
+    const submitBtn = document.querySelector('#view-reflection .btn-success[onclick="submitReflection()"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> 送信中...';
+    }
 
     runGoogleScript('submitLog', payload)
-      .then(() => {
-        Swal.fire({
-          icon: 'success',
-          title: '振り返りを送りました！',
-          timer: 1500,
-          showConfirmButton: false
-        });
+      .then((result) => {
+        if (result && !result.success && result.duplicate) {
+          Swal.fire({ icon: 'info', title: 'もう送信済みだよ', timer: 1500, showConfirmButton: false });
+        } else if (result && !result.success) {
+          Swal.fire({ icon: 'error', title: 'エラー', text: result.error });
+          isSubmitting = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+          }
+          return;
+        } else {
+          Swal.fire({
+            icon: 'success',
+            title: '振り返りを送りました！',
+            timer: 1500,
+            showConfirmButton: false
+          });
+        }
         showView('view-done');
       })
-      .catch(showError);
+      .catch(err => {
+        isSubmitting = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-send-fill me-2"></i> 送信する';
+        }
+        showError(err);
+      });
   }
 
   /**
@@ -835,14 +955,26 @@
       return;
     }
 
-    container.innerHTML = users.map(u =>
-      `<div class="d-flex justify-content-between align-items-center border-bottom py-1">
-       <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
-       <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
-         <i class="bi bi-trash"></i>
-       </button>
-     </div>`
-    ).join('');
+    container.innerHTML = users.map(u => {
+      const emailBadge = u.email
+        ? `<span class="badge bg-success bg-opacity-25 text-success ms-2" title="${u.email}"><i class="bi bi-envelope-check"></i></span>`
+        : `<span class="badge bg-warning bg-opacity-25 text-warning ms-2" title="メール未設定"><i class="bi bi-envelope-x"></i></span>`;
+      return `<div class="d-flex justify-content-between align-items-center border-bottom py-2 px-2">
+       <div>
+         <span>${u.name} <small class="text-muted">(${u.ruby})</small></span>
+         ${emailBadge}
+         <small class="text-muted d-block" style="font-size:0.75rem;">${u.email || '自動ログイン未設定'}</small>
+       </div>
+       <div class="d-flex gap-1">
+         <button class="btn btn-sm btn-outline-primary" onclick="editStudentEmail('${u.id}', '${u.name}', '${u.email || ''}')" title="メール設定">
+           <i class="bi bi-envelope-at"></i>
+         </button>
+         <button class="btn btn-sm btn-outline-danger" onclick="removeStudent('${u.id}', '${u.name}')">
+           <i class="bi bi-trash"></i>
+         </button>
+       </div>
+     </div>`;
+    }).join('');
   }
 
   function reloadRoster() {
@@ -860,6 +992,7 @@
   function addNewStudent() {
     const name = document.getElementById('new-student-name').value.trim();
     const ruby = document.getElementById('new-student-ruby').value.trim();
+    const email = document.getElementById('new-student-email')?.value.trim() || '';
     if (!name) {
       Swal.fire('名前を入力してください', '', 'warning');
       return;
@@ -867,17 +1000,54 @@
 
     Swal.fire({ title: '追加中...', didOpen: () => Swal.showLoading() });
 
-    runGoogleScript('addStudent', name, ruby || '')
+    runGoogleScript('addStudent', name, ruby || '', email)
       .then(result => {
         if (result && result.success) {
           document.getElementById('new-student-name').value = '';
           document.getElementById('new-student-ruby').value = '';
+          const emailInput = document.getElementById('new-student-email');
+          if (emailInput) emailInput.value = '';
           Swal.fire({ icon: 'success', title: '追加しました', timer: 1000, showConfirmButton: false });
-          // 名簿を再読込
           reloadRoster();
         }
       })
       .catch(showError);
+  }
+
+  /**
+   * 児童のメールアドレスを編集（教師用）
+   */
+  function editStudentEmail(studentId, name, currentEmail) {
+    Swal.fire({
+      title: `${name}のメール設定`,
+      input: 'email',
+      inputLabel: 'Googleアカウントのメールアドレス',
+      inputValue: currentEmail,
+      inputPlaceholder: 'example@school.ed.jp',
+      showCancelButton: true,
+      confirmButtonText: '保存',
+      cancelButtonText: 'キャンセル',
+      inputValidator: (value) => {
+        // 空欄は許可（メール設定解除）
+        if (value && !value.includes('@')) {
+          return 'メールアドレスの形式が正しくありません';
+        }
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: '保存中...', didOpen: () => Swal.showLoading() });
+        runGoogleScript('updateStudentEmail', studentId, result.value || '')
+          .then(res => {
+            if (res && res.success) {
+              Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+              reloadRoster();
+            } else {
+              showError(res?.error || '保存に失敗しました');
+            }
+          })
+          .catch(showError);
+      }
+    });
   }
   /**
    * 名簿一括登録
@@ -887,11 +1057,11 @@
       title: '名簿の一括登録',
       input: 'textarea',
       inputLabel: 'Excelやスプレッドシートからコピー＆ペーストしてください',
-      inputPlaceholder: '山田 太郎\tやまだ たろう\n佐藤 花子\tさとう はなこ',
+      inputPlaceholder: '山田 太郎\tやまだ たろう\ttaro@school.ed.jp\n佐藤 花子\tさとう はなこ\thanako@school.ed.jp',
       showCancelButton: true,
       confirmButtonText: '登録',
       cancelButtonText: 'キャンセル',
-      footer: '※1行に「名前 (タブ) ふりがな」の形式、または名前のみ',
+      footer: '※1行に「名前 (タブ) ふりがな (タブ) メール」の形式。メールは省略可。',
       preConfirm: (text) => {
         if (!text) return false;
         const lines = text.split('\n');
@@ -901,7 +1071,8 @@
           if (parts.length > 0 && parts[0]) {
             students.push({
               name: parts[0].trim(),
-              ruby: parts[1] ? parts[1].trim() : ''
+              ruby: parts[1] ? parts[1].trim() : '',
+              email: parts[2] ? parts[2].trim() : ''
             });
           }
         });
@@ -1474,12 +1645,49 @@
   }
 
   // --- 単元別履歴 ---
+  function exportCsv() {
+    const select = document.getElementById('history-session-select');
+    const sessionId = select ? select.value : '';
+    if (!sessionId) {
+      Swal.fire('授業を選んでください', '', 'warning');
+      return;
+    }
+    Swal.fire({ title: 'CSV生成中...', didOpen: () => Swal.showLoading() });
+    runGoogleScript('exportSessionCsv', sessionId).then(result => {
+      Swal.close();
+      if (!result || !result.success) {
+        Swal.fire('エクスポート失敗', result ? result.error : '', 'error');
+        return;
+      }
+      // BOM付きUTF-8でCSVダウンロード
+      const bom = '\uFEFF';
+      const blob = new Blob([bom + result.csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${result.title || '授業データ'}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }).catch(err => {
+      Swal.close();
+      showError(err);
+    });
+  }
+
   function loadSessionHistory(sessionId) {
     const container = document.getElementById('history-session-detail');
     if (!sessionId) {
       container.innerHTML = '<div class="text-center text-muted py-5"><i class="bi bi-arrow-up-circle d-block fs-1 mb-2 opacity-50"></i><p>授業を選んでください</p></div>';
+      // CSVボタンを隠す
+      const csvBtn = document.getElementById('btn-export-csv');
+      if (csvBtn) csvBtn.classList.add('d-none');
       return;
     }
+    // CSVエクスポートボタンを表示
+    const csvBtn = document.getElementById('btn-export-csv');
+    if (csvBtn) csvBtn.classList.remove('d-none');
 
     container.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
 
@@ -1689,9 +1897,20 @@
 
   function copyObservation() {
     const textarea = document.getElementById('observation-text');
-    textarea.select();
-    document.execCommand('copy');
-    Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+    const text = textarea.value;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+      }).catch(() => {
+        textarea.select();
+        document.execCommand('copy');
+        Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+      });
+    } else {
+      textarea.select();
+      document.execCommand('copy');
+      Swal.fire({ icon: 'success', title: 'コピーしました', timer: 1000, showConfirmButton: false });
+    }
   }
 
   /**
@@ -1816,6 +2035,8 @@
   /**
    * Unit Management Functions
    */
+  let cachedUnits = [];
+
   function loadUnits() {
     const container = document.getElementById('unit-list-container');
     if (!container) return;
@@ -1824,10 +2045,13 @@
 
     runGoogleScript('getUnits')
       .then(units => {
+        cachedUnits = units || [];
         if (!units || units.length === 0) {
           container.innerHTML = '<div class="text-center text-muted py-3">登録された単元はありません</div>';
           return;
         }
+
+        const editingId = document.getElementById('edit-unit-id').value;
 
         container.innerHTML = units.map(u => {
           const typeLabels = {
@@ -1841,15 +2065,19 @@
           };
           const typeLabel = typeLabels[u.inputType] || `<span class="badge bg-light text-dark">${u.inputType}</span>`;
           const dateStr = new Date(u.createdAt).toLocaleDateString();
+          const isEditing = u.unitId === editingId;
 
-          return `<div class="list-group-item list-group-item-action" onclick="editUnit('${u.unitId}')" style="cursor: pointer;">
+          return `<div class="list-group-item${isEditing ? ' active' : ''}" id="unit-item-${u.unitId}" style="cursor: pointer;" onclick="editUnit('${u.unitId}')">
           <div class="d-flex w-100 justify-content-between">
-            <h6 class="mb-1 fw-bold text-primary">${u.title}</h6>
-            <small class="text-muted">${dateStr}</small>
+            <h6 class="mb-1 fw-bold${isEditing ? '' : ' text-primary'}">${u.title}</h6>
+            <small class="${isEditing ? '' : 'text-muted'}">${dateStr}</small>
           </div>
           <p class="mb-1 small">${typeLabel} ${u.memo ? ' - ' + u.memo : ''}</p>
-          <div class="mt-2 text-end">
-            <button class="btn btn-sm btn-outline-danger me-1" onclick="deleteUnit(event, '${u.unitId}')">削除</button>
+          <div class="mt-2 d-flex justify-content-end gap-1">
+            <button class="btn btn-sm ${isEditing ? 'btn-light' : 'btn-outline-primary'}" onclick="editUnit('${u.unitId}'); event.stopPropagation();">
+              <i class="bi bi-pencil-square me-1"></i>編集
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteUnit(event, '${u.unitId}')">削除</button>
             <button class="btn btn-sm btn-success" onclick="startUnit(event, '${u.unitId}')">この単元で開始</button>
           </div>
         </div>`;
@@ -1940,44 +2168,123 @@
   function clearUnitForm() {
     document.getElementById('edit-unit-id').value = '';
     document.getElementById('edit-unit-title').value = '';
+    document.getElementById('edit-unit-type').value = 'SLIDER';
     document.getElementById('edit-unit-min').value = '';
     document.getElementById('edit-unit-max').value = '';
     document.getElementById('edit-unit-tags').value = '';
+    document.getElementById('edit-unit-quad-xmin').value = '';
+    document.getElementById('edit-unit-quad-xmax').value = '';
+    document.getElementById('edit-unit-quad-ymin').value = '';
+    document.getElementById('edit-unit-quad-ymax').value = '';
+    document.getElementById('edit-unit-ranking-items').value = '';
+    document.getElementById('edit-unit-curve-scenes').value = '';
+    document.getElementById('edit-unit-mandala-theme').value = '';
     document.getElementById('edit-unit-memo').value = '';
+    toggleUnitEditOptions();
+
+    // Reset UI to create mode
+    const header = document.getElementById('unit-form-header');
+    if (header) header.innerHTML = '<i class="bi bi-plus-circle me-1"></i>新規作成';
+    const saveBtn = document.getElementById('btn-save-unit');
+    if (saveBtn) saveBtn.innerHTML = '<i class="bi bi-save me-1"></i>保存';
+    const cancelBtn = document.getElementById('btn-cancel-edit');
+    if (cancelBtn) cancelBtn.classList.add('d-none');
+    const card = document.getElementById('unit-edit-card');
+    if (card) card.classList.remove('border-primary');
+
+    // Remove highlight from unit list
+    document.querySelectorAll('#unit-list-container .list-group-item.active').forEach(el => {
+      el.classList.remove('active');
+      const h6 = el.querySelector('h6');
+      if (h6) h6.classList.add('text-primary');
+      const small = el.querySelector('small');
+      if (small) small.classList.add('text-muted');
+      const editBtn = el.querySelector('.btn-light');
+      if (editBtn) { editBtn.classList.remove('btn-light'); editBtn.classList.add('btn-outline-primary'); }
+    });
   }
 
   function editUnit(unitId) {
-    // 編集モードとしてフォームにセット（リストからデータを引くのが早いが、ここでは再度取得せずDOMから...いや、リストにあるデータを使おう）
-    runGoogleScript('getUnits').then(units => {
-      const u = units.find(x => x.unitId === unitId);
-      if (!u) return;
+    const u = cachedUnits.find(x => x.unitId === unitId);
+    if (!u) {
+      // Fallback: fetch from server if cache is empty
+      runGoogleScript('getUnits').then(units => {
+        cachedUnits = units || [];
+        const found = cachedUnits.find(x => x.unitId === unitId);
+        if (found) editUnit(unitId);
+      });
+      return;
+    }
 
-      document.getElementById('edit-unit-id').value = u.unitId;
-      document.getElementById('edit-unit-title').value = u.title;
-      document.getElementById('edit-unit-type').value = u.inputType;
-      document.getElementById('edit-unit-memo').value = u.memo;
+    // Populate form fields
+    document.getElementById('edit-unit-id').value = u.unitId;
+    document.getElementById('edit-unit-title').value = u.title;
+    document.getElementById('edit-unit-type').value = u.inputType;
+    document.getElementById('edit-unit-memo').value = u.memo || '';
 
-      toggleUnitEditOptions();
+    toggleUnitEditOptions();
 
-      const opts = u.options || {};
-      if (u.inputType === 'SLIDER') {
-        document.getElementById('edit-unit-min').value = opts.minLabel || '';
-        document.getElementById('edit-unit-max').value = opts.maxLabel || '';
-      } else if (u.inputType === 'TAGS') {
-        document.getElementById('edit-unit-tags').value = (opts.tags || []).join(',');
-      } else if (u.inputType === 'QUADRANT') {
-        document.getElementById('edit-unit-quad-xmin').value = opts.xAxisLabel?.[0] || '';
-        document.getElementById('edit-unit-quad-xmax').value = opts.xAxisLabel?.[1] || '';
-        document.getElementById('edit-unit-quad-ymin').value = opts.yAxisLabel?.[0] || '';
-        document.getElementById('edit-unit-quad-ymax').value = opts.yAxisLabel?.[1] || '';
-      } else if (u.inputType === 'RANKING') {
-        document.getElementById('edit-unit-ranking-items').value = (opts.items || []).join(',');
-      } else if (u.inputType === 'CURVE') {
-        document.getElementById('edit-unit-curve-scenes').value = (opts.scenes || []).join(',');
-      } else if (u.inputType === 'MANDALA') {
-        document.getElementById('edit-unit-mandala-theme').value = opts.centerTheme || '';
+    const opts = u.options || {};
+    // Reset all option fields first
+    document.getElementById('edit-unit-min').value = '';
+    document.getElementById('edit-unit-max').value = '';
+    document.getElementById('edit-unit-tags').value = '';
+    document.getElementById('edit-unit-quad-xmin').value = '';
+    document.getElementById('edit-unit-quad-xmax').value = '';
+    document.getElementById('edit-unit-quad-ymin').value = '';
+    document.getElementById('edit-unit-quad-ymax').value = '';
+    document.getElementById('edit-unit-ranking-items').value = '';
+    document.getElementById('edit-unit-curve-scenes').value = '';
+    document.getElementById('edit-unit-mandala-theme').value = '';
+
+    if (u.inputType === 'SLIDER') {
+      document.getElementById('edit-unit-min').value = opts.minLabel || '';
+      document.getElementById('edit-unit-max').value = opts.maxLabel || '';
+    } else if (u.inputType === 'TAGS') {
+      document.getElementById('edit-unit-tags').value = (opts.tags || []).join(',');
+    } else if (u.inputType === 'QUADRANT') {
+      document.getElementById('edit-unit-quad-xmin').value = opts.xAxisLabel?.[0] || '';
+      document.getElementById('edit-unit-quad-xmax').value = opts.xAxisLabel?.[1] || '';
+      document.getElementById('edit-unit-quad-ymin').value = opts.yAxisLabel?.[0] || '';
+      document.getElementById('edit-unit-quad-ymax').value = opts.yAxisLabel?.[1] || '';
+    } else if (u.inputType === 'RANKING') {
+      document.getElementById('edit-unit-ranking-items').value = (opts.items || []).join(',');
+    } else if (u.inputType === 'CURVE') {
+      document.getElementById('edit-unit-curve-scenes').value = (opts.scenes || []).join(',');
+    } else if (u.inputType === 'MANDALA') {
+      document.getElementById('edit-unit-mandala-theme').value = opts.centerTheme || '';
+    }
+
+    // Update UI to edit mode
+    const header = document.getElementById('unit-form-header');
+    if (header) header.innerHTML = '<i class="bi bi-pencil-square me-1 text-primary"></i>編集中: <span class="text-primary">' + u.title + '</span>';
+    const saveBtn = document.getElementById('btn-save-unit');
+    if (saveBtn) saveBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>更新';
+    const cancelBtn = document.getElementById('btn-cancel-edit');
+    if (cancelBtn) cancelBtn.classList.remove('d-none');
+    const card = document.getElementById('unit-edit-card');
+    if (card) card.classList.add('border-primary');
+
+    // Highlight selected unit in the list
+    document.querySelectorAll('#unit-list-container .list-group-item').forEach(el => {
+      const isThis = el.id === 'unit-item-' + unitId;
+      el.classList.toggle('active', isThis);
+      const h6 = el.querySelector('h6');
+      if (h6) h6.classList.toggle('text-primary', !isThis);
+      const small = el.querySelector('small');
+      if (small) small.classList.toggle('text-muted', !isThis);
+      const editBtn = el.querySelector('.btn-outline-primary, .btn-light');
+      if (editBtn) {
+        editBtn.classList.toggle('btn-light', isThis);
+        editBtn.classList.toggle('btn-outline-primary', !isThis);
       }
     });
+
+    // Scroll form into view on mobile
+    if (window.innerWidth < 768) {
+      const editCard = document.getElementById('unit-edit-card');
+      if (editCard) editCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   function saveUnitForm() {
@@ -2029,11 +2336,12 @@
       memo: memo
     };
 
-    Swal.fire({ title: '保存中...', didOpen: () => Swal.showLoading() });
+    const isUpdate = !!id;
+    Swal.fire({ title: isUpdate ? '更新中...' : '保存中...', didOpen: () => Swal.showLoading() });
 
     runGoogleScript('saveUnit', payload)
       .then(() => {
-        Swal.fire({ icon: 'success', title: '保存しました', timer: 1000, showConfirmButton: false });
+        Swal.fire({ icon: 'success', title: isUpdate ? '更新しました' : '保存しました', timer: 1000, showConfirmButton: false });
         clearUnitForm();
         loadUnits();
       })
@@ -2043,11 +2351,27 @@
   function deleteUnit(event, unitId) {
     event.stopPropagation();
     event.preventDefault();
-    if (!confirm('本当に削除しますか？')) return;
 
-    runGoogleScript('deleteUnit', unitId)
-      .then(() => loadUnits())
-      .catch(showError);
+    Swal.fire({
+      title: '本当に削除しますか？',
+      text: 'この操作は元に戻せません',
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonColor: '#d33',
+      confirmButtonText: '削除する',
+      cancelButtonText: 'キャンセル'
+    }).then(result => {
+      if (!result.isConfirmed) return;
+
+      runGoogleScript('deleteUnit', unitId)
+        .then(() => {
+          // Clear form if the deleted unit was being edited
+          const editingId = document.getElementById('edit-unit-id').value;
+          if (editingId === unitId) clearUnitForm();
+          loadUnits();
+        })
+        .catch(showError);
+    });
   }
 
   function startUnit(event, unitId) {
@@ -2110,6 +2434,8 @@
     currentUser = null;
     currentSession = null;
     currentPhase = 'BEFORE';
+    isAutoLogin = false;
+    isSubmitting = false;
     if (scatterChart) {
       scatterChart.destroy();
       scatterChart = null;
@@ -2163,7 +2489,7 @@
             updatePhaseButtons(currentSession.phase || 'BEFORE');
           } else {
             currentSession = null;
-            updatePhaseButtons('CLOSED'); // デフォルト状態
+            updatePhaseButtons('CLOSED');
           }
           renderRoster(data.users);
           initChart();
@@ -2172,7 +2498,12 @@
           return;
         }
 
-        // 生徒用ロジック
+        // === 生徒用ロジック ===
+
+        // メール自動ログイン判定
+        const autoStudent = data.autoLoginStudent;
+
+        // ドロップダウンに名簿をセット（フォールバック用）
         const select = document.getElementById('student-select');
         if (data.users && Array.isArray(data.users) && data.users.length > 0) {
           select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
@@ -2184,12 +2515,7 @@
           });
         }
 
-        // 共通: ログイン状態の復元
-        const storedUid = localStorage.getItem('studentId');
-        if (storedUid) {
-          currentUser = { id: storedUid };
-        }
-
+        // セッション情報のセットアップ
         if (data.activeSession) {
           currentSession = data.activeSession;
           currentPhase = currentSession.phase || 'BEFORE';
@@ -2200,7 +2526,44 @@
           if (phaseLabel && phaseLabels[currentPhase]) {
             phaseLabel.innerHTML = phaseLabels[currentPhase];
           }
+        }
 
+        // --- 自動ログイン処理 ---
+        if (autoStudent) {
+          isAutoLogin = true;
+          localStorage.setItem('studentId', autoStudent.id);
+
+          // 自動ログインメッセージを表示
+          const autoMsg = document.getElementById('auto-login-msg');
+          const manualForm = document.getElementById('manual-login-form');
+          const autoName = document.getElementById('auto-login-name');
+          if (autoMsg) autoMsg.classList.remove('d-none');
+          if (manualForm) manualForm.classList.add('d-none');
+          if (autoName) autoName.textContent = autoStudent.name;
+
+          showView('view-login');
+
+          // 少しだけ表示してから自動遷移
+          setTimeout(() => {
+            login(autoStudent.id);
+          }, 800);
+          return;
+        }
+
+        // --- フォールバック: 手動ログイン ---
+        isAutoLogin = false;
+        const autoMsg = document.getElementById('auto-login-msg');
+        const manualForm = document.getElementById('manual-login-form');
+        if (autoMsg) autoMsg.classList.add('d-none');
+        if (manualForm) manualForm.classList.remove('d-none');
+
+        // localStorage からの復元
+        const storedUid = localStorage.getItem('studentId');
+        if (storedUid) {
+          currentUser = { id: storedUid };
+        }
+
+        if (currentSession) {
           if (storedUid) {
             if (currentPhase === 'AFTER') {
               showReflectionView();
@@ -2211,34 +2574,9 @@
             showView('view-login');
           }
         } else {
-          // セッションがない場合
           if (storedUid) {
-            showView('view-waiting'); // ログイン済みなら待機画面へ（ここからポートフォリオが見れる）
+            showView('view-waiting');
           } else {
-            showView('view-login'); // 未ログインならログイン画面へ（本来は待機画面でいいが、名前を選ばせたいならLoginへ。しかしSessionがないとLoginしても進めない...いや、LoginだけさせてWaitingに行かせればいい）
-            // 修正案: Sessionがないときは Login画面で名前を選ばせても、始まらないので意味がない？
-            // いや、名前を選んで「授業を始める」ボタンを押しても、Sessionがないとエラーになるか、Waitingに行くだけ。
-            // 待機画面に「ログイン」ボタンはない。
-            // したがって、Sessionがないときは「ログイン画面」を表示し、名前を選んでボタンを押したら「currentUserをセットしてWaiting画面へ」というフローが必要。
-
-            // 現状の login() 関数は activeSession を前提としているか確認が必要。
-            // login() 関数を見ると:
-            //   if (!currentSession) { Alert('授業が始まっていません'); return; }
-            // となっている。これではSessionがないときにログインできない。
-
-            // 対策: Sessionがなくてもログイン（名札選択）できるようにする、または
-            // ポートフォリオを見るためには「誰か」を特定する必要がある。
-            // Sessionがない状態でポートフォリオを見るには？
-            // view-login で名前を選ばせる -> ポートフォリオボタンを押す -> currentUserセット -> showMyLog
-            // あるいは、view-waiting に「名前を選ぶ」機能をつけるか。
-
-            // 今回はシンプルに:
-            // 1. storedUid があれば view-waiting (ポートフォリオボタンあり)
-            // 2. なければ view-login (ただし login() は Session必須なので、ポートフォリオ専用のログインフローが必要？)
-            // いや、login() のチェックを緩和すればいい。
-
-            // とりあえずここは storedUid がなければ view-login に飛ばす。
-            // login() の修正も必要。
             showView('view-login');
           }
         }
