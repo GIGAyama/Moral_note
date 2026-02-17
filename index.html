@@ -434,9 +434,14 @@
                     </div>
                   </div>
                   <div class="col-md-7">
-                    <div class="card border">
-                      <div class="card-header bg-white py-2">
-                        <small class="fw-bold">編集・詳細</small>
+                    <div class="card border" id="unit-edit-card">
+                      <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center">
+                        <small class="fw-bold" id="unit-form-header">
+                          <i class="bi bi-plus-circle me-1"></i>新規作成
+                        </small>
+                        <button class="btn btn-sm btn-outline-secondary d-none" id="btn-cancel-edit" onclick="clearUnitForm()">
+                          <i class="bi bi-x-lg me-1"></i>新規に戻る
+                        </button>
                       </div>
                       <div class="card-body">
                         <input type="hidden" id="edit-unit-id">
@@ -489,7 +494,9 @@
                           placeholder="指導メモ"></textarea>
                         <div class="d-flex justify-content-end gap-2">
                           <button class="btn btn-sm btn-outline-secondary" onclick="clearUnitForm()">クリア</button>
-                          <button class="btn btn-sm btn-primary" onclick="saveUnitForm()">保存</button>
+                          <button class="btn btn-sm btn-primary" id="btn-save-unit" onclick="saveUnitForm()">
+                            <i class="bi bi-save me-1"></i>保存
+                          </button>
                         </div>
                       </div>
                     </div>
