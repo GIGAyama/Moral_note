@@ -284,8 +284,15 @@
   }
 
   @keyframes dialogue-pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.08); }
+
+    0%,
+    100% {
+      transform: scale(1);
+    }
+
+    50% {
+      transform: scale(1.08);
+    }
   }
 
   .dialogue-expand-hint {
@@ -366,42 +373,53 @@
     body {
       padding-bottom: 40px;
     }
+
     footer.fixed-bottom {
       position: relative !important;
     }
+
     .container {
       padding-left: 8px;
       padding-right: 8px;
     }
+
     .btn-lg {
       padding: 0.8rem 1.2rem;
       font-size: 1.2rem;
     }
+
     .card-body {
       padding: 16px !important;
     }
+
     /* ランキング: タッチ操作しやすく */
     .ranking-item .card-body {
       padding: 10px !important;
     }
+
     .ranking-item .bi-grip-vertical {
       font-size: 1.6rem !important;
     }
+
     /* 対話モードフルスクリーン */
     .dialogue-fs-content h1 {
       font-size: 2.5rem;
     }
+
     .dialogue-fs-content p {
       font-size: 1.4rem;
     }
+
     .dialogue-fs-content .dialogue-fs-icon {
       font-size: 4rem;
     }
+
     /* フルスクリーン意見表示 */
     .fs-opinion-card {
       padding: 10px 12px;
       margin-bottom: 8px;
     }
+
     .fs-opinion-card .fs-opinion-text {
       font-size: 1.05rem;
     }
@@ -421,10 +439,12 @@
     appearance: none;
     background: transparent;
   }
+
   input[type=range]::-webkit-slider-runnable-track {
     height: 8px;
     border-radius: 4px;
   }
+
   input[type=range]::-webkit-slider-thumb {
     -webkit-appearance: none;
     width: 36px;
@@ -433,12 +453,336 @@
     background: #1a73e8;
     cursor: pointer;
     margin-top: -14px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
   }
 
   /* 文字数カウンター */
   #char-count-entry.text-danger,
   #char-count-reflect.text-danger {
     font-weight: bold;
+  }
+
+  /* ============================
+     ローディングアニメーション
+     ============================ */
+  :root {
+    --scope-size: 280px;
+    --dark-overlay: rgba(28, 35, 49, 0.95);
+    --c-joy: #ffb3ba;
+    --c-calm: #bae1ff;
+    --c-wonder: #baffc9;
+    --c-energy: #ffffba;
+    --c-love: #e8baff;
+  }
+
+  /* 望遠鏡全体の揺れアニメーション（手ブレ） */
+  .telescope-wrapper {
+    position: absolute;
+    width: var(--scope-size);
+    height: var(--scope-size);
+    animation: float-scope 5s ease-in-out infinite alternate;
+  }
+
+  @keyframes float-scope {
+    0% {
+      transform: translate(0, 0) rotate(0deg);
+    }
+
+    33% {
+      transform: translate(6px, -8px) rotate(1deg);
+    }
+
+    66% {
+      transform: translate(-5px, 4px) rotate(-1deg);
+    }
+
+    100% {
+      transform: translate(4px, 6px) rotate(0deg);
+    }
+  }
+
+  /* 望遠鏡の奥に見える「心の中」の世界 */
+  .inner-world {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    /* 優しく温かい光のグラデーション */
+    background: radial-gradient(circle at 40% 40%, #ffffff 0%, #fff0f5 30%, #e8f0fe 70%, #a8c0ff 100%);
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.15);
+    overflow: hidden;
+    animation: spin-bg 20s linear infinite;
+  }
+
+  @keyframes spin-bg {
+    0% {
+      transform: rotate(0deg);
+    }
+
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* キラキラした光の粒子（背景） */
+  .inner-world::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background-image:
+      radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.9) 0%, transparent 4%),
+      radial-gradient(circle at 70% 60%, rgba(255, 255, 255, 0.9) 0%, transparent 5%),
+      radial-gradient(circle at 40% 80%, rgba(255, 255, 255, 0.8) 0%, transparent 3%);
+    opacity: 0.6;
+  }
+
+  /* 溢れ出すアイテムたちのコンテナ */
+  .particles {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    z-index: 20;
+  }
+
+  /* 飛び出す「こころの欠片」共通スタイル */
+  .emotion-item {
+    position: absolute;
+    top: 0;
+    left: 0;
+    /* 起点を完全に中心にするための変更 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 0;
+    /* ふんわり生き生きと飛び出してくるイージング */
+    animation: pop-out 4s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+    animation-delay: var(--delay);
+    user-select: none;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.1));
+  }
+
+  /* 丸い光の玉（感情の色） */
+  .emotion-item.orb {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #fff, var(--color));
+    box-shadow: 0 0 15px var(--color);
+  }
+
+  /* シンプルな記号（絵文字の代わり） */
+  .emotion-item.icon {
+    font-size: 2.2rem;
+    color: rgba(255, 255, 255, 0.95);
+    font-weight: bold;
+    /* 光るテキストエフェクト */
+    text-shadow: 0 0 12px rgba(255, 255, 255, 0.8), 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  /* translate(-50%, -50%)を含めて正確に中心から飛ばす */
+  @keyframes pop-out {
+    0% {
+      opacity: 0;
+      transform: translate(calc(var(--tx) * 0.05 - 50%), calc(var(--ty) * 0.05 - 50%)) scale(0) rotate(0deg);
+      filter: blur(2px) drop-shadow(0 0 0 rgba(0, 0, 0, 0));
+    }
+
+    15% {
+      opacity: 1;
+      filter: blur(0px) drop-shadow(0 4px 8px rgba(0, 0, 0, 0.1));
+    }
+
+    75% {
+      opacity: 0.9;
+    }
+
+    100% {
+      opacity: 0;
+      transform: translate(calc(var(--tx) - 50%), calc(var(--ty) - 50%)) scale(var(--scale)) rotate(var(--rot));
+    }
+  }
+
+  /* スコープ（羅針盤）の枠 */
+  .scope-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    box-sizing: border-box;
+    /* ★これによってborder分が内側に計算され、中心がズレない */
+    /* 外側を暗闇で覆う */
+    box-shadow: 0 0 0 150vmax var(--dark-overlay),
+      inset 0 0 20px rgba(0, 0, 0, 0.4);
+    /* 枠線はアプリのテーマカラー(Primary)に近い爽やかなブルー */
+    border: 8px solid #e8f0fe;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* 羅針盤（コンパス）の目盛り装飾 */
+  .compass-marks {
+    position: absolute;
+    inset: -14px;
+    /* 枠の少し外側に配置 */
+    border-radius: 50%;
+    border: 2px dashed rgba(26, 115, 232, 0.4);
+    /* Bootstrap Primary color */
+    box-sizing: border-box;
+    /* ★中心ズレ防止 */
+    animation: spin-compass 30s linear infinite reverse;
+  }
+
+  /* 上下左右のポインター */
+  .compass-marks::before,
+  .compass-marks::after {
+    content: '';
+    position: absolute;
+    background: #1a73e8;
+    border-radius: 4px;
+  }
+
+  .compass-marks::before {
+    top: -4px;
+    bottom: -4px;
+    left: 50%;
+    width: 4px;
+    transform: translateX(-50%);
+  }
+
+  .compass-marks::after {
+    left: -4px;
+    right: -4px;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+  }
+
+  @keyframes spin-compass {
+    0% {
+      transform: rotate(0deg);
+    }
+
+    100% {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* レンズの反射光 */
+  .glass-reflection {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.4) 0%, transparent 40%, transparent 60%, rgba(255, 255, 255, 0.05) 100%);
+  }
+
+  /* 照準線（優しくて細いクロス。起点のズレを修正） */
+  .crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 2px;
+  }
+
+  .crosshair::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: -40px;
+    width: 80px;
+    height: 1px;
+    background: rgba(26, 115, 232, 0.3);
+    transform: translateY(-50%);
+  }
+
+  .crosshair::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -40px;
+    width: 1px;
+    height: 80px;
+    background: rgba(26, 115, 232, 0.3);
+    transform: translateX(-50%);
+  }
+
+  /* ローディングテキスト */
+  .loading-text {
+    position: absolute;
+    bottom: 12%;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #ffffff;
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    z-index: 100;
+    white-space: nowrap;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+    /* ルビのような優しい雰囲気 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .loading-text small {
+    font-size: 0.8rem;
+    color: #bae1ff;
+    margin-bottom: 2px;
+    font-weight: 500;
+  }
+
+  .loading-text .dots::after {
+    content: '';
+    display: inline-block;
+    width: 1em;
+    text-align: left;
+    animation: loading-dots 1.5s steps(4, end) infinite;
+  }
+
+  @keyframes loading-dots {
+    0% {
+      content: '';
+    }
+
+    25% {
+      content: '.';
+    }
+
+    50% {
+      content: '..';
+    }
+
+    75% {
+      content: '...';
+    }
+
+    100% {
+      content: '';
+    }
+  }
+
+  /* レスポンシブ対応（スマホ画面） */
+  @media (max-width: 500px) {
+    :root {
+      --scope-size: 240px;
+    }
+
+    .loading-text {
+      font-size: 1.2rem;
+      bottom: 8%;
+    }
   }
 </style>

@@ -12,19 +12,72 @@
     1. 共通パーツ & ローディング (COMMON PARTS)
     =================================================================
   -->
-  <div id="loading"
-    class="position-fixed top-0 start-0 w-100 h-100 bg-white d-flex justify-content-center align-items-center"
-    style="z-index: 9999;">
-    <div class="text-center">
-      <div class="spinner-border text-primary" role="status"></div>
-      <p class="mt-2 text-muted">読み込み中...</p>
+  <div id="loading" class="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
+    style="z-index: 9999; background-color: #1c2331; overflow: hidden;">
+    <div class="telescope-wrapper">
+
+      <!-- 望遠鏡の奥に見える景色 -->
+      <div class="inner-world"></div>
+
+      <!-- 望遠鏡の枠（羅針盤デザイン） -->
+      <div class="scope-overlay">
+        <div class="compass-marks"></div>
+        <div class="glass-reflection"></div>
+        <div class="crosshair"></div>
+      </div>
+
+      <!-- 奥から溢れ出して手前へ飛んでくる「こころの欠片」たち -->
+      <div class="particles">
+        <!-- 感情の光の玉 -->
+        <div class="emotion-item orb"
+          style="--color: var(--c-joy); --tx: 0px; --ty: -350px; --scale: 2.2; --delay: 0.0s; --rot: 0deg;"></div>
+        <div class="emotion-item orb"
+          style="--color: var(--c-calm); --tx: 250px; --ty: 180px; --scale: 2.5; --delay: 0.8s; --rot: 0deg;"></div>
+        <div class="emotion-item orb"
+          style="--color: var(--c-wonder); --tx: -280px; --ty: 150px; --scale: 2.0; --delay: 1.6s; --rot: 0deg;"></div>
+        <div class="emotion-item orb"
+          style="--color: var(--c-energy); --tx: 100px; --ty: -250px; --scale: 1.8; --delay: 2.4s; --rot: 0deg;"></div>
+        <div class="emotion-item orb"
+          style="--color: var(--c-love); --tx: -250px; --ty: -180px; --scale: 2.8; --delay: 3.2s; --rot: 0deg;"></div>
+
+        <!-- シンプルな記号（心の動き・発見・疑問などを表現） -->
+        <div class="emotion-item icon" style="--tx: 180px; --ty: -280px; --scale: 1.5; --delay: 0.3s; --rot: 15deg;">!
+        </div>
+        <div class="emotion-item icon" style="--tx: 300px; --ty: -100px; --scale: 1.2; --delay: 0.6s; --rot: -10deg;">✦
+        </div>
+        <div class="emotion-item icon" style="--tx: 150px; --ty: 300px; --scale: 1.5; --delay: 1.1s; --rot: 20deg;">?
+        </div>
+        <div class="emotion-item icon" style="--tx: 0px; --ty: 350px; --scale: 1.4; --delay: 1.4s; --rot: -15deg;">♥
+        </div>
+
+        <div class="emotion-item icon" style="--tx: -180px; --ty: 280px; --scale: 1.3; --delay: 1.9s; --rot: 30deg;">!
+        </div>
+        <div class="emotion-item icon" style="--tx: -300px; --ty: 0px; --scale: 1.2; --delay: 2.2s; --rot: -20deg;">✧
+        </div>
+        <div class="emotion-item icon" style="--tx: -150px; --ty: -300px; --scale: 1.6; --delay: 2.7s; --rot: 10deg;">✦
+        </div>
+
+        <div class="emotion-item icon" style="--tx: 220px; --ty: 50px; --scale: 1.3; --delay: 3.0s; --rot: 45deg;">♥
+        </div>
+        <div class="emotion-item icon" style="--tx: -80px; --ty: 260px; --scale: 1.4; --delay: 3.5s; --rot: -30deg;">?
+        </div>
+        <div class="emotion-item icon" style="--tx: 60px; --ty: -320px; --scale: 1.5; --delay: 3.8s; --rot: 15deg;">✧
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ローディングのテキスト表示 -->
+    <div class="loading-text">
+      <small>じゅんびちゅう...</small>
+      <span>こころの中をのぞいています<span class="dots"></span></span>
     </div>
   </div>
 
   <nav class="navbar navbar-light bg-white shadow-sm fixed-top">
     <div class="container-fluid">
       <span class="navbar-brand mb-0 h1 text-primary">
-        <i class="bi bi-compass"></i> こころスコープ
+        <i class="bi bi-binoculars"></i> こころスコープ
       </span>
       <button class="btn btn-sm btn-outline-secondary" onclick="toggleTeacherMode()">
         <i class="bi bi-person-fill-gear"></i>
@@ -60,7 +113,8 @@
       <div id="manual-login-form">
         <div class="card shadow-sm mx-auto w-100" style="max-width: 600px;">
           <div class="card-body text-center p-4">
-            <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt></ruby>を<ruby>選
+            <h3 class="card-title mb-4 fw-bold text-primary" style="font-size: 2rem;"><ruby>名前<rt>なまえ</rt>
+                </ruby>を<ruby>選
                 <rt>えら</rt>
               </ruby>んでね</h3>
             <select id="student-select" class="form-select form-select-lg mb-4 py-3 fs-3" style="font-size: 1.5rem;">
@@ -123,8 +177,8 @@
           <!-- Reason Input -->
           <div class="mb-4">
             <label class="form-label fs-4"><ruby>理由<rt>りゆう</rt></ruby>や<ruby>考<rt>かんが</rt></ruby>え</label>
-            <textarea class="form-control fs-4 p-3" id="input-text" rows="3" maxlength="500"
-              placeholder="どうしてそう思ったの？" oninput="updateCharCount(this, 'char-count-entry')"></textarea>
+            <textarea class="form-control fs-4 p-3" id="input-text" rows="3" maxlength="500" placeholder="どうしてそう思ったの？"
+              oninput="updateCharCount(this, 'char-count-entry')"></textarea>
             <div class="text-end mt-1">
               <small class="text-muted" id="char-count-entry">0 / 500</small>
             </div>
@@ -156,7 +210,8 @@
           <div class="dialogue-label-area">
             <div class="dialogue-icon"><i class="bi bi-chat-heart-fill"></i></div>
             <h3><ruby>対話<rt>たいわ</rt></ruby>モード</h3>
-            <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+            <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt>
+                </ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
             <div id="dialogue-value-display"></div>
           </div>
           <div class="dialogue-expand-hint">
@@ -317,12 +372,12 @@
                   type="button" role="tab" onclick="loadUnits()">単元管理</button>
               </li>
               <li class="nav-item" role="presentation">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-roster"
-                  type="button" role="tab">名簿管理</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-roster" type="button"
+                  role="tab">名簿管理</button>
               </li>
               <li class="nav-item" role="presentation">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-settings"
-                  type="button" role="tab">設定</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-settings" type="button"
+                  role="tab">設定</button>
               </li>
             </ul>
           </div>
@@ -439,7 +494,8 @@
                         <small class="fw-bold" id="unit-form-header">
                           <i class="bi bi-plus-circle me-1"></i>新規作成
                         </small>
-                        <button class="btn btn-sm btn-outline-secondary d-none" id="btn-cancel-edit" onclick="clearUnitForm()">
+                        <button class="btn btn-sm btn-outline-secondary d-none" id="btn-cancel-edit"
+                          onclick="clearUnitForm()">
                           <i class="bi bi-x-lg me-1"></i>新規に戻る
                         </button>
                       </div>
@@ -523,7 +579,8 @@
                       <input type="text" class="form-control form-control-sm" id="new-student-ruby" placeholder="ふりがな">
                     </div>
                     <div class="col-5">
-                      <input type="email" class="form-control form-control-sm" id="new-student-email" placeholder="メールアドレス（任意）">
+                      <input type="email" class="form-control form-control-sm" id="new-student-email"
+                        placeholder="メールアドレス（任意）">
                     </div>
                   </div>
                   <div class="d-flex gap-2">
@@ -636,12 +693,12 @@
                   type="button" role="tab">単元別履歴</button>
               </li>
               <li class="nav-item" role="presentation">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-history-student"
-                  type="button" role="tab">児童別履歴</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-history-student" type="button"
+                  role="tab">児童別履歴</button>
               </li>
               <li class="nav-item" role="presentation">
-                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-observation"
-                  type="button" role="tab">所見作成</button>
+                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#content-observation" type="button"
+                  role="tab">所見作成</button>
               </li>
             </ul>
           </div>
@@ -653,8 +710,7 @@
                 <div class="mb-3 d-flex gap-2 align-items-end">
                   <div class="flex-grow-1">
                     <label class="form-label small text-muted">実施済み授業を選択</label>
-                    <select class="form-select" id="history-session-select"
-                      onchange="loadSessionHistory(this.value)">
+                    <select class="form-select" id="history-session-select" onchange="loadSessionHistory(this.value)">
                       <option value="">-- 授業を選んでください --</option>
                     </select>
                   </div>
@@ -674,8 +730,7 @@
               <div class="tab-pane fade" id="content-history-student" role="tabpanel">
                 <div class="mb-3">
                   <label class="form-label small text-muted">児童を選択</label>
-                  <select class="form-select" id="history-student-select"
-                    onchange="loadStudentHistoryView(this.value)">
+                  <select class="form-select" id="history-student-select" onchange="loadStudentHistoryView(this.value)">
                     <option value="">-- 児童を選んでください --</option>
                   </select>
                 </div>
@@ -732,7 +787,8 @@
       <div class="dialogue-fs-content">
         <div class="dialogue-fs-icon"><i class="bi bi-chat-heart-fill"></i></div>
         <h1><ruby>対話<rt>たいわ</rt></ruby>モード</h1>
-        <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt></ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
+        <p><ruby>画面<rt>がめん</rt></ruby>の<ruby>色<rt>いろ</rt></ruby>が<ruby>違<rt>ちが</rt></ruby>う<ruby>人<rt>ひと</rt>
+            </ruby>を<ruby>探<rt>さが</rt></ruby>そう！</p>
         <div id="dialogue-fs-value" class="mt-3"></div>
       </div>
       <button class="dialogue-fs-close" onclick="closeDialogueFullscreen()">
