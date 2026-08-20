@@ -18,7 +18,9 @@ const SCRIPT_PROP = PropertiesService.getScriptProperties();
 const GEMINI_API_KEY = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
 
 // 認証設定
-const DEFAULT_TEACHER_PASSWORD = "admin";
+// ※既定パスワード（admin）は廃止しました。パスワードが未設定のときは
+//   「まず管理者パスワードを設定してください」という状態になります。
+// ※パスワードは平文で保存せず、SHA-256のハッシュ値を TEACHER_PASSWORD_HASH に保存します。
 const MAX_LOGIN_ATTEMPTS = 5;         // 最大試行回数
 const LOCKOUT_DURATION_MIN = 10;      // ロックアウト時間（分）
 
@@ -43,6 +45,144 @@ function validateStudentName(name) {
 function validateEmail(email) {
   if (!email) return true; // 空はOK
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim());
+}
+
+// =================================================================
+// 1c. 認可 (AUTHORIZATION)
+// =================================================================
+/**
+ * 【教員向け解説】
+ * ここは「アクセスしている人が先生かどうか」をサーバー側で判定する部分です。
+ * 画面のパスワード入力は表示を切り替えるためのものにすぎず、
+ * 本当の鍵はこの assertTeacher_() です。先生専用の関数は必ず冒頭でこれを呼びます。
+ *
+ * 【初回セットアップの手順】
+ *  1. スクリプトエディタで manualSetup() を1回実行してください。
+ *     → 実行した人のメールアドレスが OWNER_EMAIL に記録され、その人が先生になります。
+ *  2. 先生が複数いる場合は、スクリプトプロパティ TEACHER_EMAILS に
+ *     カンマ区切りでメールアドレスを登録してください。
+ *     （例: sato@example.ed.jp,suzuki@example.ed.jp）
+ *     TEACHER_EMAILS が設定されている場合は、そちらを優先して照合します。
+ *  ※どちらも登録されていない場合は、安全のため全員拒否します（誰でも通す動きにはしません）。
+ *
+ * 【デプロイ設定について】
+ * appsscript.json では webapp を executeAs: USER_DEPLOYING / access: DOMAIN にしています。
+ * USER_ACCESSING にすると児童にもデータ用スプレッドシートの権限が必要になり、
+ * シートを直接開けば全員分の記録が読めてしまうため、ここでの認可が意味をなさなくなるからです。
+ * （同一ドメインであれば USER_DEPLOYING でも Session.getActiveUser().getEmail() は取得できます）
+ */
+
+/**
+ * アクセスしている人のメールアドレスを取得します（小文字・前後の空白なし）。
+ * 匿名アクセスなどで取得できない場合は空文字を返します。
+ */
+function getCallerEmail_() {
+  try {
+    return String(Session.getActiveUser().getEmail() || '').toLowerCase().trim();
+  } catch (e) {
+    console.warn('メールアドレスを取得できませんでした:', e);
+    return '';
+  }
+}
+
+/**
+ * スクリプトプロパティ TEACHER_EMAILS（カンマ区切り）を配列にして返します。
+ */
+function getTeacherEmails_() {
+  const raw = SCRIPT_PROP.getProperty('TEACHER_EMAILS') || '';
+  return String(raw).split(',')
+    .map(v => String(v).toLowerCase().trim())
+    .filter(v => v !== '');
+}
+
+/**
+ * 初回セットアップを実行した人のメールアドレスを OWNER_EMAIL に記録します。
+ * すでに記録されている場合は上書きしません（あとから来た人が管理者になれないようにするため）。
+ * ※児童のアクセスで勝手に記録されないよう、手動実行の関数からのみ呼び出します。
+ */
+function rememberOwnerEmail_() {
+  const existing = SCRIPT_PROP.getProperty('OWNER_EMAIL');
+  if (existing) return existing;
+  const email = getCallerEmail_();
+  if (!email) return '';
+  SCRIPT_PROP.setProperty('OWNER_EMAIL', email);
+  console.log('OWNER_EMAIL を記録しました: ' + email);
+  return email;
+}
+
+/**
+ * アクセスしている人が先生かどうかを判定します。
+ * TEACHER_EMAILS があればそれで照合し、なければ OWNER_EMAIL で照合します。
+ * どちらも無い、またはメールアドレスが取得できない場合は false（＝先生ではない）です。
+ */
+function isTeacher_() {
+  const email = getCallerEmail_();
+  if (!email) return false;
+
+  const teachers = getTeacherEmails_();
+  if (teachers.length > 0) {
+    return teachers.indexOf(email) !== -1;
+  }
+
+  const owner = String(SCRIPT_PROP.getProperty('OWNER_EMAIL') || '').toLowerCase().trim();
+  return owner !== '' && owner === email;
+}
+
+/**
+ * 先生でなければ例外を投げて処理を止めます。
+ * 先生専用の関数は、いちばん最初にこれを呼んでください。
+ */
+function assertTeacher_() {
+  if (isTeacher_()) return true;
+
+  const email = getCallerEmail_();
+  if (!email) {
+    // 匿名アクセスでデプロイされている場合もここに来ます（安全のため拒否します）
+    throw new Error('権限がありません。学校（同じドメイン）のGoogleアカウントでログインしてください。メールアドレスが確認できないため、先生用の機能は使えません。');
+  }
+  throw new Error('権限がありません。この機能は先生専用です。（' + email + ' は先生として登録されていません。スクリプトプロパティ TEACHER_EMAILS に追加するか、manualSetup を実行してください）');
+}
+
+/**
+ * 先生、または「その児童本人」だけに許可します。
+ * 児童が自分の記録（マイページ）を見る場合のために用意した判定です。
+ * 本人かどうかは、名簿に登録されたメールアドレスとログイン中のメールアドレスで照合します。
+ */
+function assertTeacherOrSelf_(studentId) {
+  if (isTeacher_()) return true;
+
+  const email = getCallerEmail_();
+  if (!email) {
+    throw new Error('権限がありません。学校（同じドメイン）のGoogleアカウントでログインしてください。メールアドレスが確認できないため、記録は表示できません。');
+  }
+
+  const ss = getDB();
+  const userSheet = ss.getSheetByName('名簿');
+  if (userSheet && userSheet.getLastRow() > 1) {
+    const me = userSheet.getDataRange().getValues().slice(1)
+      .find(r => r[0] === studentId && !r[3]);
+    if (me && me[4] && String(me[4]).toLowerCase().trim() === email) {
+      return true;
+    }
+  }
+  throw new Error('権限がありません。自分の記録だけが見られます。（見られない場合は、名簿に自分のメールアドレスが登録されているか先生に確認してください）');
+}
+
+/**
+ * パスワードをSHA-256でハッシュ化して16進文字列にします。
+ * 平文のパスワードは保存も比較もしません。
+ */
+function hashPassword_(password) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(password || ''),
+    Utilities.Charset.UTF_8
+  );
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += ('0' + (bytes[i] & 0xFF).toString(16)).slice(-2);
+  }
+  return hex;
 }
 
 // =================================================================
@@ -199,15 +339,13 @@ function getInitialData() {
   try {
     const ss = getDB();
 
-    // アクセス中のユーザーのメールアドレスを取得
-    let callerEmail = '';
-    try {
-      callerEmail = Session.getActiveUser().getEmail() || '';
-    } catch (e) {
-      console.warn('Could not get active user email:', e);
-    }
+    // アクセス中のユーザーのメールアドレスと、先生かどうかを取得
+    const callerEmail = getCallerEmail_();
+    const isTeacher = isTeacher_();
 
     // 名簿取得
+    // 【重要】名簿の全件（氏名・ふりがな・メール）は先生にだけ返します。
+    // 児童には、自分の情報（自動ログイン用）と授業情報だけを返します。
     const userSheet = ss.getSheetByName('名簿');
     let users = [];
     let autoLoginStudent = null;
@@ -215,11 +353,13 @@ function getInitialData() {
       const rows = userSheet.getDataRange().getValues().slice(1)
         .filter(r => !r[3]); // deletedAtがないもの
 
-      users = rows.map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+      if (isTeacher) {
+        users = rows.map(r => ({ id: r[0], name: r[1], ruby: r[2], email: r[4] || '' }));
+      }
 
-      // メールアドレスで自動照合
+      // メールアドレスで自動照合（自分の行だけを返すので、児童に返しても問題ありません）
       if (callerEmail) {
-        const matched = rows.find(r => r[4] && String(r[4]).toLowerCase().trim() === callerEmail.toLowerCase().trim());
+        const matched = rows.find(r => r[4] && String(r[4]).toLowerCase().trim() === callerEmail);
         if (matched) {
           autoLoginStudent = { id: matched[0], name: matched[1], ruby: matched[2] };
         }
@@ -251,7 +391,9 @@ function getInitialData() {
 
     return {
       success: true,
+      isTeacher: isTeacher,
       users: users,
+      rosterHidden: !isTeacher, // 児童には名簿を返していないことを画面側に伝えます
       activeSession: activeSession,
       autoLoginStudent: autoLoginStudent,
       callerEmail: callerEmail
@@ -306,6 +448,7 @@ function getPollingData() {
  * @param {string} newPhase - BEFORE, AFTER, CLOSED
  */
 function updateSessionPhase(sessionId, newPhase) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('授業');
   const data = sheet.getDataRange().getValues();
@@ -325,6 +468,7 @@ function updateSessionPhase(sessionId, newPhase) {
  * 授業を終了します（ACTIVEステータスをCLOSEDに変更）
  */
 function closeSession(sessionId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('授業');
   const data = sheet.getDataRange().getValues();
@@ -346,6 +490,7 @@ function closeSession(sessionId) {
  * @param {string} optionsJson - 設定オプションのJSON文字列
  */
 function createSession(title, inputType, optionsJson) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('授業');
   
@@ -381,6 +526,7 @@ function createSession(title, inputType, optionsJson) {
  * 名簿に生徒を1名追加します
  */
 function addStudent(name, ruby, email) {
+  assertTeacher_(); // 先生専用
   if (!validateStudentName(name)) {
     return { success: false, error: '名前は1〜50文字で入力してください' };
   }
@@ -399,6 +545,7 @@ function addStudent(name, ruby, email) {
  * @param {Array} students - {name, ruby} の配列
  */
 function addStudentBulk(students) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   if (!sheet) return { success: false, error: '名簿シートが見つかりません' };
@@ -421,6 +568,7 @@ function addStudentBulk(students) {
  * 名簿から生徒を削除します（物理削除ではなく、削除日時を入れる論理削除）
  */
 function deleteStudent(studentId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   const data = sheet.getDataRange().getValues();
@@ -438,6 +586,7 @@ function deleteStudent(studentId) {
  * 名簿リストを取得します
  */
 function getStudents() {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const userSheet = ss.getSheetByName('名簿');
   if (!userSheet || userSheet.getLastRow() <= 1) return { success: true, users: [] };
@@ -453,6 +602,7 @@ function getStudents() {
  * 児童のメールアドレスを更新します（教師用）
  */
 function updateStudentEmail(studentId, email) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('名簿');
   const data = sheet.getDataRange().getValues();
@@ -532,6 +682,7 @@ function submitLog(data) {
  * 教師用ダッシュボード向けの授業ログ取得（散布図表示用）
  */
 function getSessionLogs(sessionId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('記録');
   if (!sheet || sheet.getLastRow() <= 1) return [];
@@ -554,6 +705,8 @@ function getSessionLogs(sessionId) {
  * 特定生徒の過去の授業ログを含めたポートフォリオデータを取得します
  */
 function getStudentPortfolio(studentId) {
+  // 先生、または本人だけが見られます（児童が自分の記録を見る画面でも使うため）
+  assertTeacherOrSelf_(studentId);
   const ss = getDB();
   
   // 1. 全授業取得
@@ -630,6 +783,7 @@ function getAnonymousOpinions(sessionId) {
  * 教師用レポート: 生徒ごとの変容サマリー（Before -> After）を取得
  */
 function getStudentSummaries(sessionId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const logSheet = ss.getSheetByName('記録');
   const userSheet = ss.getSheetByName('名簿');
@@ -671,6 +825,8 @@ function getStudentSummaries(sessionId) {
  * 特定生徒の特定授業でのログを取得（振り返り入力画面での過去ログ表示用）
  */
 function getStudentLogs(sessionId, studentId) {
+  // 先生、または本人だけが見られます
+  assertTeacherOrSelf_(studentId);
   const ss = getDB();
   const sheet = ss.getSheetByName('記録');
   if (!sheet || sheet.getLastRow() <= 1) return [];
@@ -695,6 +851,7 @@ function getStudentLogs(sessionId, studentId) {
  * 単元の保存・新規作成
  */
 function saveUnit(unitData) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('単元');
   // 既存データがある場合は更新
@@ -729,6 +886,7 @@ function saveUnit(unitData) {
  * 単元リストの取得
  */
 function getUnits() {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('単元');
   if (!sheet || sheet.getLastRow() <= 1) return [];
@@ -753,6 +911,7 @@ function getUnits() {
  * 指定した単元データをもとに、新しい授業を開始します
  */
 function startSessionFromUnit(unitId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const unitSheet = ss.getSheetByName('単元');
   const sessionSheet = ss.getSheetByName('授業');
@@ -789,6 +948,7 @@ function startSessionFromUnit(unitId) {
  * 単元を削除（論理削除）
  */
 function deleteUnit(unitId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('単元');
   const data = sheet.getDataRange().getValues();
@@ -860,6 +1020,7 @@ function generateSocraticQuestion(sessionTitle, studentText, inputType, studentV
  * クライアントから送信されたBase64データを受け取ります。
  */
 function parseLessonPdf(base64Data) {
+  assertTeacher_(); // 先生専用
   const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
   if (!apiKey) return { success: false, error: 'AI機能を使うにはAPIキーを設定してください' };
 
@@ -940,6 +1101,7 @@ function parseLessonPdf(base64Data) {
  * Gemini APIキーの保存
  */
 function saveGeminiApiKey(apiKey) {
+  assertTeacher_(); // 先生専用
   SCRIPT_PROP.setProperty('GEMINI_API_KEY', apiKey || '');
   return { success: true };
 }
@@ -947,8 +1109,10 @@ function saveGeminiApiKey(apiKey) {
 /**
  * 権限認証を強制するためのダミー関数
  * エディタ上でこの関数を選択して実行すると、必要な権限の承認画面が表示されます。
+ * あわせて、実行した人のメールアドレスを OWNER_EMAIL に記録します。
  */
 function forceAuth() {
+  rememberOwnerEmail_();
   SpreadsheetApp.getActiveSpreadsheet();
   Session.getActiveUser().getEmail();
   UrlFetchApp.fetch("https://www.google.com");
@@ -959,6 +1123,7 @@ function forceAuth() {
  * Gemini APIキーの有無確認
  */
 function hasGeminiApiKey() {
+  assertTeacher_(); // 先生専用
   const key = SCRIPT_PROP.getProperty('GEMINI_API_KEY');
   return { hasKey: !!(key && key.length > 0) };
 }
@@ -971,6 +1136,7 @@ function hasGeminiApiKey() {
  * 授業データをCSV形式で取得（教師用エクスポート）
  */
 function exportSessionCsv(sessionId) {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
 
   // 授業情報
@@ -1023,6 +1189,7 @@ function exportSessionCsv(sessionId) {
  * 全授業セッション一覧を取得（履歴表示用）
  */
 function getAllSessions() {
+  assertTeacher_(); // 先生専用
   const ss = getDB();
   const sheet = ss.getSheetByName('授業');
   if (!sheet || sheet.getLastRow() <= 1) return [];
@@ -1050,6 +1217,7 @@ function getAllSessions() {
  * 児童の全学習記録をもとに通知表用の所見文を生成します
  */
 function generateObservation(studentId) {
+  assertTeacher_(); // 先生専用
   const apiKey = GEMINI_API_KEY || SCRIPT_PROP.getProperty('GEMINI_API_KEY');
   if (!apiKey) return { success: false, error: 'Gemini APIキーを設定してください' };
 
@@ -1071,9 +1239,11 @@ function generateObservation(studentId) {
     return entry;
   }).join('\n\n');
 
+  // 【重要】外部AI（Gemini）には氏名・ふりがな・メールアドレスを送りません。
+  // 児童は「この児童」という仮名で伝え、実名への差し戻しは画面側（js.html）で行います。
   const prompt = `あなたはベテランの小学校教師です。道徳の授業における児童の学習記録を分析し、通知表に記載する「所見」を作成してください。
 
-【児童名】${student[1]}（${student[2]}）
+【対象児童】この児童
 
 【学習記録（${portfolio.length}回分）】
 ${historyText}
@@ -1086,6 +1256,7 @@ ${historyText}
 - ポジティブな表現を中心にしつつ、今後の課題も示唆する
 - 「〜できました」「〜が見られました」などの所見文体で書く
 - 具体的な授業名やエピソードを含める
+- 児童を指すときは、かならず「この児童」と書く（あとで実名に置き換えるため）
 
 所見文のみを出力してください（説明や前置き不要）。`;
 
@@ -1117,6 +1288,13 @@ ${historyText}
 
 /**
  * 教師用パスワードの照合（試行回数制限付き）
+ *
+ * 【重要】この関数はセキュリティ境界ではありません。
+ * ここで行っているのは「先生用の画面に切り替えるか」という表示上の判定だけです。
+ * データを守っている本当の境界は、各関数の冒頭で呼んでいる assertTeacher_()
+ * （＝ログイン中のGoogleアカウントのメールアドレス照合）です。
+ * そのため、パスワードを知っていても先生として登録されていない人は
+ * 名簿や記録を1件も取得できません。
  */
 function checkTeacherPassword(password) {
   const cache = CacheService.getScriptCache();
@@ -1129,14 +1307,21 @@ function checkTeacherPassword(password) {
     return { success: false, error: 'ログイン試行回数の上限に達しました。しばらく待ってから再試行してください。', locked: true };
   }
 
-  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
-  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
-  const isDefault = !setPass || setPass === DEFAULT_TEACHER_PASSWORD;
+  // パスワードはハッシュ値だけを保存しています（平文比較はしません）
+  const storedHash = SCRIPT_PROP.getProperty('TEACHER_PASSWORD_HASH');
+  if (!storedHash) {
+    // 既定パスワード（admin）は廃止したので、未設定のときは誰も通しません
+    return {
+      success: false,
+      needsSetup: true,
+      error: 'まず管理者パスワードを設定してください。'
+    };
+  }
 
-  if (password === correctPass) {
+  if (hashPassword_(password) === storedHash) {
     // 成功: 試行カウントをリセット
     cache.remove(attemptKey);
-    return { success: true, requirePasswordChange: isDefault };
+    return { success: true, requirePasswordChange: false };
   }
 
   // 失敗: 試行回数をインクリメント
@@ -1151,19 +1336,33 @@ function checkTeacherPassword(password) {
 }
 
 /**
- * 教師用パスワードの変更
+ * 教師用パスワードの設定・変更
+ * パスワードはSHA-256のハッシュ値にしてから保存します（平文では保存しません）。
+ * ※パスワードそのものはセキュリティ境界ではないため、本当の確認は assertTeacher_() で行います。
  */
 function changeTeacherPassword(currentPass, newPass) {
-  const setPass = SCRIPT_PROP.getProperty('TEACHER_PASSWORD');
-  const correctPass = setPass || DEFAULT_TEACHER_PASSWORD;
-  if (currentPass !== correctPass) {
+  assertTeacher_(); // 先生専用（ここが本当の入り口の鍵です）
+
+  const storedHash = SCRIPT_PROP.getProperty('TEACHER_PASSWORD_HASH');
+  // 未設定のときは「初回設定」なので、現在のパスワードは不要です
+  if (storedHash && hashPassword_(currentPass) !== storedHash) {
     return { success: false, error: '現在のパスワードが違います' };
   }
-  if (!newPass || newPass.length < 4) {
+  if (!newPass || String(newPass).length < 4) {
     return { success: false, error: 'パスワードは4文字以上にしてください' };
   }
-  SCRIPT_PROP.setProperty('TEACHER_PASSWORD', newPass);
+  SCRIPT_PROP.setProperty('TEACHER_PASSWORD_HASH', hashPassword_(newPass));
+  // 以前のバージョンで平文保存されていたパスワードが残っていれば消します
+  SCRIPT_PROP.deleteProperty('TEACHER_PASSWORD');
   return { success: true };
+}
+
+/**
+ * 管理者パスワードが設定済みかどうかを返します（画面の出し分け用）
+ */
+function hasTeacherPassword() {
+  const storedHash = SCRIPT_PROP.getProperty('TEACHER_PASSWORD_HASH');
+  return { hasPassword: !!storedHash };
 }
 
 
@@ -1179,11 +1378,20 @@ function getParentFolderId(folder) {
 
 /**
  * 初回セットアップ用関数（手動実行用）
+ * スクリプトエディタでこの関数を1回実行してください。
+ * 実行した人のメールアドレスが OWNER_EMAIL に記録され、その人が先生として扱われます。
+ * （先生が複数いる場合は、スクリプトプロパティ TEACHER_EMAILS にカンマ区切りで登録してください）
  */
 function manualSetup() {
   try {
+    const owner = rememberOwnerEmail_();
     const ss = getDB();
     console.log("✅ セットアップ完了！ DB ID:", ss.getId());
+    if (owner) {
+      console.log("👤 管理者(OWNER_EMAIL)として登録されました:", owner);
+    } else {
+      console.warn("⚠ メールアドレスを取得できませんでした。スクリプトプロパティ TEACHER_EMAILS に先生のメールアドレスを登録してください。");
+    }
   } catch(e) {
     console.error("セットアップ失敗:", e);
   }

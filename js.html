@@ -505,6 +505,8 @@
         preConfirm: (pass) => {
           return runGoogleScript('checkTeacherPassword', pass)
             .then(result => {
+              // パスワード未設定のときは、そのまま初回設定の画面に進みます
+              if (result.needsSetup) return result;
               if (!result.success) {
                 throw new Error(result.error || 'パスワードが違います');
               }
@@ -517,10 +519,15 @@
         allowOutsideClick: () => !Swal.isLoading()
       }).then((result) => {
         if (result.isConfirmed) {
+          const res = result.value || {};
+          // パスワードが未設定の場合は、まず設定してもらう
+          if (res.needsSetup) {
+            promptPasswordChange('', true);
+            return;
+          }
           localStorage.setItem('isTeacher', 'true');
-          // デフォルトパスワードの場合は変更を促す
-          if (result.value && result.value.requirePasswordChange) {
-            promptPasswordChange();
+          if (res.requirePasswordChange) {
+            promptPasswordChange('');
           } else {
             resetApp();
           }
@@ -529,10 +536,14 @@
     }
   }
 
-  function promptPasswordChange() {
+  // ※パスワードは画面切替のためのものです。データを守っているのはサーバー側のメール照合です。
+  function promptPasswordChange(currentPass, isFirstSetup) {
     Swal.fire({
-      title: 'パスワードを変更してください',
-      html: '<p class="small text-muted">セキュリティのため、デフォルトパスワードから変更してください。</p>' +
+      title: isFirstSetup ? '管理者パスワードを設定してください' : 'パスワードを変更してください',
+      html: '<p class="small text-muted">' +
+        (isFirstSetup
+          ? 'まだ管理者パスワードが設定されていません。先生用の画面に入るためのパスワードを決めてください。'
+          : 'セキュリティのため、パスワードを変更してください。') + '</p>' +
         '<input type="password" id="swal-new-pass" class="swal2-input" placeholder="新しいパスワード（4文字以上）">' +
         '<input type="password" id="swal-new-pass-confirm" class="swal2-input" placeholder="もう一度入力">',
       showCancelButton: true,
@@ -549,7 +560,7 @@
           Swal.showValidationMessage('パスワードが一致しません');
           return false;
         }
-        return runGoogleScript('changeTeacherPassword', 'admin', newPass)
+        return runGoogleScript('changeTeacherPassword', currentPass || '', newPass)
           .then(result => {
             if (!result.success) throw new Error(result.error);
             return true;
@@ -558,7 +569,13 @@
       }
     }).then((result) => {
       if (result.isConfirmed) {
-        Swal.fire({ icon: 'success', title: 'パスワードを変更しました', timer: 1500, showConfirmButton: false });
+        if (isFirstSetup) localStorage.setItem('isTeacher', 'true');
+        Swal.fire({
+          icon: 'success',
+          title: isFirstSetup ? 'パスワードを設定しました' : 'パスワードを変更しました',
+          timer: 1500,
+          showConfirmButton: false
+        });
       }
       resetApp();
     });
@@ -1879,7 +1896,11 @@
     runGoogleScript('generateObservation', studentId)
       .then(res => {
         if (res.success) {
-          textarea.value = res.observation;
+          // AIには実名を送っていないので、返ってきた文章の「この児童」をここで実名に置き換えます
+          const displayName = res.name || '';
+          textarea.value = displayName
+            ? String(res.observation).replace(/この児童/g, displayName)
+            : res.observation;
           result.classList.remove('d-none');
           Swal.fire({ icon: 'success', title: '所見を作成しました', timer: 1500, showConfirmButton: false });
         } else {
@@ -2484,6 +2505,14 @@
 
         // 先生ならロジック終了
         if (isTeacher) {
+          // サーバー側で先生と認められていない場合は、名簿や記録は返ってきません
+          if (!data.isTeacher) {
+            Swal.fire({
+              icon: 'warning',
+              title: '先生として登録されていません',
+              html: '<p class="small">名簿や記録を見るには、スクリプトプロパティ <code>TEACHER_EMAILS</code> にご自身のメールアドレスを登録するか、スクリプトエディタで <code>manualSetup</code> を実行してください。</p>'
+            });
+          }
           if (data.activeSession) {
             currentSession = data.activeSession;
             updatePhaseButtons(currentSession.phase || 'BEFORE');
@@ -2504,6 +2533,8 @@
         const autoStudent = data.autoLoginStudent;
 
         // ドロップダウンに名簿をセット（フォールバック用）
+        // ※プライバシー保護のため、名簿全件は先生にしか返ってきません。
+        //   児童の画面では、Googleアカウントによる自動ログインを使います。
         const select = document.getElementById('student-select');
         if (data.users && Array.isArray(data.users) && data.users.length > 0) {
           select.innerHTML = '<option value="" selected disabled>ここをタップして選ぶ</option>';
@@ -2513,6 +2544,16 @@
             option.innerHTML = `${u.name} <small>(${u.ruby})</small>`;
             select.appendChild(option);
           });
+        } else if (data.rosterHidden) {
+          select.innerHTML = '<option value="" selected disabled>名前のリストは表示されません</option>';
+          select.disabled = true;
+          if (!document.getElementById('roster-hidden-hint')) {
+            const hint = document.createElement('div');
+            hint.id = 'roster-hidden-hint';
+            hint.className = 'alert alert-warning small mb-3';
+            hint.textContent = '学校のGoogleアカウントでログインすると、自動で自分の名前になります。名前が出てこないときは先生に伝えてください。';
+            select.parentNode.insertBefore(hint, select.nextSibling);
+          }
         }
 
         // セッション情報のセットアップ
