@@ -990,7 +990,8 @@ function generateSocraticQuestion(sessionTitle, studentText, inputType, studentV
 問いかけのみを出力してください（説明や前置き不要）。`;
 
   try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: 100, temperature: 0.7 }
@@ -999,6 +1000,7 @@ function generateSocraticQuestion(sessionTitle, studentText, inputType, studentV
     const response = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true
     });
@@ -1055,7 +1057,8 @@ function parseLessonPdf(base64Data) {
 
 ※JSON以外の余計なテキストは一切含めないでください。`;
 
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
     const payload = {
       contents: [{
         parts: [
@@ -1069,6 +1072,7 @@ function parseLessonPdf(base64Data) {
     const response = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true
     });
@@ -1261,7 +1265,8 @@ ${historyText}
 所見文のみを出力してください（説明や前置き不要）。`;
 
   try {
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey;
+    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
     const payload = {
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: 500, temperature: 0.5 }
@@ -1270,6 +1275,7 @@ ${historyText}
     const response = UrlFetchApp.fetch(url, {
       method: 'post',
       contentType: 'application/json',
+      headers: { 'x-goog-api-key': apiKey },
       payload: JSON.stringify(payload),
       muteHttpExceptions: true
     });
