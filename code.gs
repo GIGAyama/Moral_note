@@ -990,27 +990,14 @@ function generateSocraticQuestion(sessionTitle, studentText, inputType, studentV
 問いかけのみを出力してください（説明や前置き不要）。`;
 
   try {
-    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
+    // 通信・再試行・応答の取り出しは正本 Gemini.gs（GigaGemini）に任せる。
+    // API キーは正本側で x-goog-api-key ヘッダに載る（URL クエリには入れない）。
+    const question = GigaGemini.call({
+      apiKey: apiKey,
+      prompt: prompt,
       generationConfig: { maxOutputTokens: 100, temperature: 0.7 }
-    };
-
-    const response = UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': apiKey },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
     });
-
-    const json = JSON.parse(response.getContentText());
-    if (json.candidates && json.candidates[0] && json.candidates[0].content) {
-      const question = json.candidates[0].content.parts[0].text.trim();
-      return { success: true, question: question };
-    }
-    return { success: false, reason: 'NO_RESPONSE' };
+    return { success: true, question: question };
   } catch (e) {
     console.error('Gemini API Error:', e);
     return { success: false, reason: e.toString() };
@@ -1057,43 +1044,17 @@ function parseLessonPdf(base64Data) {
 
 ※JSON以外の余計なテキストは一切含めないでください。`;
 
-    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    const payload = {
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: 'application/pdf', data: base64Data } }
-        ]
-      }],
-      generationConfig: { response_mime_type: "application/json" }
-    };
-
-    const response = UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': apiKey },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
+    // 通信・再試行・コードフェンスの除去つき JSON 解釈は正本 Gemini.gs に任せる。
+    // PDF は parts に inline_data として混ぜる（正本の buildBody が req.parts を尊重する）。
+    const result = GigaGemini.callJson({
+      apiKey: apiKey,
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: 'application/pdf', data: base64Data } }
+      ],
+      generationConfig: { response_mime_type: 'application/json' }
     });
-
-    const responseCode = response.getResponseCode();
-    const responseText = response.getContentText();
-    console.log(`Gemini API Response: ${responseCode} - ${responseText}`); // DEBUG LOG
-
-    if (responseCode !== 200) {
-      return { success: false, error: `AI API Error (${responseCode}): ${responseText}` };
-    }
-
-    const json = JSON.parse(responseText);
-    if (json.candidates && json.candidates[0] && json.candidates[0].content) {
-      const resultText = json.candidates[0].content.parts[0].text;
-      // Clean up markdown code blocks if present (relaxed regex)
-      const cleanedText = resultText.replace(/```json/g, '').replace(/```/g, '').trim();
-      const result = JSON.parse(cleanedText);
-      return { success: true, data: result };
-    }
-    return { success: false, error: 'AIからの応答がありませんでした (No candidates)' };
+    return { success: true, data: result };
 
   } catch (e) {
     console.error(e);
@@ -1265,27 +1226,13 @@ ${historyText}
 所見文のみを出力してください（説明や前置き不要）。`;
 
   try {
-    // API キーは URL クエリに入れない（アクセスログやプロキシに残る）。ヘッダで渡す。
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    const payload = {
-      contents: [{ parts: [{ text: prompt }] }],
+    // 通信・再試行・応答の取り出しは正本 Gemini.gs（GigaGemini）に任せる。
+    const observation = GigaGemini.call({
+      apiKey: apiKey,
+      prompt: prompt,
       generationConfig: { maxOutputTokens: 500, temperature: 0.5 }
-    };
-
-    const response = UrlFetchApp.fetch(url, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { 'x-goog-api-key': apiKey },
-      payload: JSON.stringify(payload),
-      muteHttpExceptions: true
     });
-
-    const json = JSON.parse(response.getContentText());
-    if (json.candidates && json.candidates[0] && json.candidates[0].content) {
-      const observation = json.candidates[0].content.parts[0].text.trim();
-      return { success: true, observation: observation, name: student[1], ruby: student[2] };
-    }
-    return { success: false, error: 'AIからの応答がありませんでした' };
+    return { success: true, observation: observation, name: student[1], ruby: student[2] };
   } catch (e) {
     console.error('Gemini API Error:', e);
     return { success: false, error: e.toString() };
