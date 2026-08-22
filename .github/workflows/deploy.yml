@@ -1,0 +1,132 @@
+# =====================================================================
+# deploy.yml — main の内容を Apps Script へ反映する（正本）
+# =====================================================================
+# 正本は GIGAyama.github.io/standards/gas/deploy.yml です。
+# 各リポジトリの .github/workflows/deploy.yml はそのコピーで、CI の drift
+# ジョブが照合しています。直すときは正本を直してから配ってください。
+#
+# main が更新されたら、リポジトリの内容を Apps Script プロジェクトへ反映し、
+# 既存のWebアプリのデプロイを新しいバージョンへ差し替えます。
+#
+# 事前に必要な設定は standards/docs/gas-auto-deploy.md にあります。
+# 秘密が1つも設定されていないうちは、何もせずに終わります（設定前の main
+# 更新を赤くしないため）。一部だけ設定されている場合は、取り違えを疑って
+# 止めます。
+# =====================================================================
+name: Deploy to Apps Script
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 反映は直列にする。2つ同時に走ると、あとから始まったほうが古いコードで
+# 上書きしうる。走っているものは止めない（途中で切ると中途半端に反映される）。
+concurrency:
+  group: deploy-apps-script
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Push and redeploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check deployment secrets
+        id: secrets
+        shell: bash
+        env:
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+          GAS_DEPLOYMENT_IDS: ${{ secrets.GAS_DEPLOYMENT_IDS }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          have=0
+          missing=""
+          # デプロイ先は GAS_DEPLOYMENT_ID か GAS_DEPLOYMENT_IDS のどちらかがあればよい
+          # （教師用と児童用のように2つに分かれているアプリがあるため）
+          deployment="${GAS_DEPLOYMENT_IDS:-}${GAS_DEPLOYMENT_ID:-}"
+
+          for pair in "GAS_SCRIPT_ID:${GAS_SCRIPT_ID:-}" \
+                      "GAS_DEPLOYMENT_ID(S):${deployment}" \
+                      "CLASPRC_JSON:${CLASPRC_JSON:-}"; do
+            name="${pair%%:*}"; value="${pair#*:}"
+            if [ -n "${value}" ]; then have=$((have+1)); else missing="${missing} ${name}"; fi
+          done
+
+          if [ "${have}" -eq 0 ]; then
+            echo "::notice::自動反映はまだ設定されていません。standards/docs/gas-auto-deploy.md の手順でシークレットを登録してください。"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "${missing}" ]; then
+            echo "::error::シークレットが足りません:${missing}（standards/docs/gas-auto-deploy.md を参照）"
+            exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.secrets.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # 壊れたものを反映しない。ゲートを通ってから初めてGASを触る。
+      # package.json を持たないリポジトリもあるので、あるときだけ走らせる。
+      - name: Run quality gate
+        if: steps.secrets.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f package.json ]; then
+            echo "package.json が無いので、ゲートは飛ばします。"
+            exit 0
+          fi
+          if [ -f package-lock.json ]; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi
+          # どの指示でゲートを回すかはリポジトリによって違う。名前を決め打ちで
+          # 順に試すと、あるはずのゲートが落ちたことを次の試行が覆い隠すので、
+          # package.json を読んで1つだけ選ぶ。
+          gate=$(node -e "const s=(require('./package.json').scripts)||{}; \
+            console.log(s.quality ? 'quality' : s.ci ? 'ci' : s.check ? 'check' : '')")
+          if [ -z "${gate}" ]; then
+            echo "ゲートの指示（quality / ci / check）が見つからないので、飛ばします。"
+            exit 0
+          fi
+          echo "npm run ${gate} を実行します。"
+          npm run "${gate}"
+
+      - name: Install clasp
+        if: steps.secrets.outputs.ready == 'true'
+        run: npm install --no-save --no-package-lock --no-audit --no-fund @google/clasp@3.3.0
+
+      # clasp push は GAS 側を丸ごと上書きする。GASエディタで直接直した箇所があれば
+      # それは消える。取り返しがつかないので、送る前の中身を必ず控えて残す。
+      # 消えるものがあるときは gas-deploy.mjs が push の前で止める。
+      - name: Deploy
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          GAS_SCRIPT_ID: ${{ secrets.GAS_SCRIPT_ID }}
+          GAS_DEPLOYMENT_ID: ${{ secrets.GAS_DEPLOYMENT_ID }}
+          GAS_DEPLOYMENT_IDS: ${{ secrets.GAS_DEPLOYMENT_IDS }}
+          GAS_ROOT_DIR: ${{ vars.GAS_ROOT_DIR }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+          GAS_DEPLOY_DESCRIPTION: ${{ github.sha }}
+        run: node scripts/gas-deploy.mjs deploy
+
+      - name: Upload pre-push snapshot
+        if: always() && steps.secrets.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-before-push-${{ github.sha }}
+          path: dist/gas-before-push
+          retention-days: 30
+          if-no-files-found: warn

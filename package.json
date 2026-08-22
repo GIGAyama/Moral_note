@@ -1,0 +1,14 @@
+{
+  "name": "moral-note",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "gas:install": "npm install --no-save --no-package-lock --no-audit --no-fund @google/clasp@3.3.0",
+    "gas:login": "node scripts/gas-deploy.mjs login",
+    "gas:status": "node scripts/gas-deploy.mjs status",
+    "gas:backup": "node scripts/gas-deploy.mjs backup",
+    "gas:push": "node scripts/gas-deploy.mjs push",
+    "deploy": "node scripts/gas-deploy.mjs deploy"
+  }
+}

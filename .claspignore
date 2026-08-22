@@ -1,0 +1,20 @@
+# clasp が Apps Script へ送るファイルを、ここで絞り込みます。
+#
+# 送るのは「GASプロジェクトの中身そのもの」だけです。リポジトリには
+# GitHub Pages に置く法務ページ（privacy.html / terms.html）や、
+# テスト・ドキュメント・node_modules も入っていますが、それらは
+# GAS で動かすものではありません。
+#
+# 書き方は .gitignore と同じで、**まず全部を除外してから、必要なものだけ
+# 戻します**。.html は GAS が読むものだけを名指しで戻しています
+# （*.html にすると privacy.html などまで送られるため）。
+#
+# .gs を足したときは何もしなくても送られます。.html を足したときは
+# ここに1行足してください。npm run gas:status で確かめられます。
+**/**
+!appsscript.json
+!*.gs
+!css.html
+!index.html
+!js.html
+!js_patterns.html

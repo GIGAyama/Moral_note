@@ -3,6 +3,14 @@
     {
       "canonical": "gas/Gemini.gs",
       "local": "Gemini.gs"
+    },
+    {
+      "canonical": "gas/gas-deploy.mjs",
+      "local": "scripts/gas-deploy.mjs"
+    },
+    {
+      "canonical": "gas/deploy.yml",
+      "local": ".github/workflows/deploy.yml"
     }
   ]
 }
