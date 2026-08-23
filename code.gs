@@ -111,9 +111,39 @@ function rememberOwnerEmail_() {
 }
 
 /**
+ * このウェブアプリを公開した人（＝スプレッドシートをコピーして配った先生）の
+ * メールアドレスを返します。
+ *
+ * appsscript.json は executeAs: USER_DEPLOYING なので、ウェブアプリの中では
+ * 「実行しているユーザー」＝公開した先生です。スクリプトエディタから手で
+ * 実行したときは、実行した本人になります。
+ * userinfo.email スコープだけで取れるので、権限は広がりません。
+ */
+function getDeployerEmail_() {
+  try {
+    return String(Session.getEffectiveUser().getEmail() || '').toLowerCase().trim();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
  * アクセスしている人が先生かどうかを判定します。
- * TEACHER_EMAILS があればそれで照合し、なければ OWNER_EMAIL で照合します。
- * どちらも無い、またはメールアドレスが取得できない場合は false（＝先生ではない）です。
+ *
+ * 次の順で照合します。
+ *  1. TEACHER_EMAILS（複数の先生で使う学級。設定してあれば、これだけを見ます）
+ *  2. OWNER_EMAIL（前の配り方で manualSetup を実行済みの学級。消すと動かなくなります）
+ *  3. このアプリを公開した本人（＝コピーしてデプロイした先生）
+ *
+ * 3 を足した理由:
+ * スプレッドシートのコピーで配る形にしたので、先生の手元には毎回まっさらな
+ * コピーが届きます。そこで OWNER_EMAIL を頼りにすると、
+ * **デプロイした先生自身が「先生として登録されていません」と拒まれます。**
+ * 公開した本人であることは Session.getEffectiveUser() で確かめられるので、
+ * 初期設定の儀式を1つ減らします。
+ *
+ * どこにも当てはまらない、またはメールアドレスが取得できない場合は false です
+ * （＝誰でも通す動きにはしません）。
  */
 function isTeacher_() {
   const email = getCallerEmail_();
@@ -125,7 +155,10 @@ function isTeacher_() {
   }
 
   const owner = String(SCRIPT_PROP.getProperty('OWNER_EMAIL') || '').toLowerCase().trim();
-  return owner !== '' && owner === email;
+  if (owner !== '') return owner === email;
+
+  const deployer = getDeployerEmail_();
+  return deployer !== '' && deployer === email;
 }
 
 /**
@@ -169,6 +202,31 @@ function assertTeacherOrSelf_(studentId) {
 }
 
 /**
+ * 児童が読んでよい授業かどうかを確かめます。
+ *
+ * 先生は、どの授業でも読めます。
+ * 児童が読めるのは「いま行われている授業（status が ACTIVE）」だけです。
+ * 終わった授業の記述は、先生の画面からしか開けません。
+ */
+function assertActiveSessionOrTeacher_(ss, sessionId) {
+  if (isTeacher_()) return true;
+
+  if (!sessionId) {
+    throw new Error('授業が指定されていません。');
+  }
+
+  const sheet = ss.getSheetByName('授業');
+  if (sheet && sheet.getLastRow() > 1) {
+    const row = sheet.getDataRange().getValues().slice(1)
+      .find(function (r) { return r[0] === sessionId && !r[7]; });
+    if (row && row[5] === 'ACTIVE') return true;
+  }
+
+  throw new Error('いま行われている授業のぶんだけが見られます。'
+    + '（終わった授業の記録は、先生の画面から見てください）');
+}
+
+/**
  * パスワードをSHA-256でハッシュ化して16進文字列にします。
  * 平文のパスワードは保存も比較もしません。
  */
@@ -191,10 +249,18 @@ function hashPassword_(password) {
 
 /**
  * Webアプリとしてのアクセスポイント (GETリクエスト処理)
- * index.html を表示します。
+ * app-shell.html を表示します。
+ *
+ * 【なぜ index ではなく app-shell という名前なのか】
+ * リポジトリには CNAME があり、GitHub Pages が moral-note.giga-school.com として
+ * 中身をそのまま配っています。この外枠を index.html という名前で置くと、
+ * **その住所を開いた先生に GAS 用のテンプレートがそのまま配られます。**
+ * `<?!= include('css'); ?>` はブラウザには意味が無く黙って捨てられるので、
+ * スタイルもスクリプトも当たらない、ほぼ白い画面になります。
+ * index.html は導入案内のページに使い、GAS の外枠はこの名前で持ちます。
  */
 function doGet(e) {
-  const template = HtmlService.createTemplateFromFile('index');
+  const template = HtmlService.createTemplateFromFile('app-shell');
   return template.evaluate()
     .setTitle(APP_NAME)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -214,117 +280,493 @@ function include(filename) {
 // =================================================================
 
 /**
- * データベース(スプレッドシート)を取得します。
- * IDが存在しない場合やファイルが見つからない場合は、自動的に新規作成・修復を試みます。
- * @return {Spreadsheet} スプレッドシートオブジェクト
+ * このアプリが使うシートの並びと、1行目に置く見出し。
+ *
+ * 【なぜ「見出しの表」を1か所に持つのか】
+ * このアプリは、シートを**列の番号**で読み書きしています。たとえば記録シートは
+ * `r[2]` が児童ID、`r[4]` が数値、`r[7]` が削除の印です（getSessionLogs など）。
+ * 先生が誤字を直しに表を開き、列を1本だけ挿し込むと、
+ *   ・散布図の点が全部ずれる
+ *   ・消したはずの記録が戻る（deletedAt が別の列になるため）
+ *   ・「すでに送信済みです」が出なくなり、同じ児童の記録が二重に入る
+ * が、**画面にエラーを1つも出さないまま**起きます。
+ * 表を1か所にまとめておけば、その「ずれ」を機械で見つけられます。
+ *
+ * ここに1行足すと、すでに配ったスプレッドシートにも自動でそろいます（ensureSheets_）。
  */
-function getDB() {
-  const dbId = SCRIPT_PROP.getProperty('DB_ID');
-  let ss = null;
-
-  // 1. 既存IDがあるか確認
-  if (dbId) {
-    try {
-      ss = SpreadsheetApp.openById(dbId);
-      // シート構造の健全性チェック（名簿シートがなければ修復）
-      if (!ss.getSheetByName('名簿')) {
-        setupSheets(ss);
-      }
-    } catch (e) {
-      console.warn("DB access failed. ID exists but open failed.", e);
-      ss = null;
-    }
-  }
-
-  // 2. SSが取得できなかった場合、新規作成 (Auto-Setup)
-  if (!ss) {
-    try {
-      ss = createDB();
-    } catch (e) {
-      console.error("Failed to create DB.", e);
-      throw new Error("データベースの作成に失敗しました。Googleドライブの容量等を確認してください。");
-    }
-  }
-
-  return ss;
-}
-
-/**
- * 新規にデータベース用スプレッドシートを作成し、初期設定を行います。
- */
-function createDB() {
-  const ss = SpreadsheetApp.create(DB_FILE_NAME);
-  const newId = ss.getId();
-  
-  // プロパティにIDを保存
-  SCRIPT_PROP.setProperty('DB_ID', newId);
-
-  // シート構築
-  setupSheets(ss);
-
-  return ss;
-}
-
-/**
- * スプレッドシートのシート構造を定義・適用します。
- * 必要なシートがない場合は自動作成します。
- */
-function setupSheets(ss) {
-  // 1. 設定シート
-  let configSheet = ss.getSheetByName('設定');
-  if (!configSheet) {
-    configSheet = ss.insertSheet('設定');
-    configSheet.getRange(1, 1, 1, 2).setValues([['Key', 'Value']]).setBackground('#e8eaed').setFontWeight('bold');
-    configSheet.getRange(2, 1, 2, 2).setValues([
-      ['AppName', APP_NAME],
-      ['GeminiApiKey', '']
-    ]);
-  }
-
-  // 2. 名簿シート
-  let userSheet = ss.getSheetByName('名簿');
-  if (!userSheet) {
-    userSheet = ss.insertSheet('名簿');
-    userSheet.getRange(1, 1, 1, 5).setValues([['studentId', 'name', 'ruby', 'deletedAt', 'email']]).setBackground('#e8eaed').setFontWeight('bold');
-    // デモデータ
-    userSheet.getRange(2, 1, 3, 5).setValues([
+var SHEETS_ = [
+  {
+    name: '設定',
+    header: ['Key', 'Value'],
+    initialRows: [['AppName', APP_NAME], ['GeminiApiKey', '']],
+  },
+  {
+    name: '名簿',
+    header: ['studentId', 'name', 'ruby', 'deletedAt', 'email'],
+    initialRows: [
       ['s001', '佐藤 健太', 'さとう けんた', '', ''],
       ['s002', '鈴木 愛', 'すずき あい', '', ''],
-      ['s003', '高橋 翔', 'たかはし かける', '', '']
-    ]);
+      ['s003', '高橋 翔', 'たかはし かける', '', ''],
+    ],
+  },
+  {
+    name: '授業',
+    header: ['sessionId', 'date', 'title', 'inputType', 'options', 'status', 'phase', 'deletedAt'],
+    initialRows: 'demoSession',   // 日付を毎回作り直すので、関数で組み立てます
+  },
+  {
+    name: '記録',
+    header: ['logId', 'sessionId', 'studentId', 'phase', 'value', 'text', 'timestamp', 'deletedAt'],
+  },
+  {
+    name: '単元',
+    header: ['unitId', 'title', 'inputType', 'options', 'memo', 'createdAt', 'deletedAt'],
+  },
+];
+
+/** 授業シートに置く見本の1行。新しく作ったときだけ入ります。 */
+function demoSessionRows_() {
+  const demoOptions = JSON.stringify({
+    minLabel: '正直に言う', maxLabel: '黙っている', tags: ['葛藤', '不安', '決意'],
+  });
+  return [['demo_01', new Date(), '正直な心（デモ）', 'SLIDER', demoOptions, 'ACTIVE', 'BEFORE', '']];
+}
+
+/** SHEETS_ の initialRows を、実際に書き込む2次元配列にして返します。 */
+function initialRowsOf_(spec) {
+  if (spec.initialRows === 'demoSession') return demoSessionRows_();
+  return spec.initialRows || [];
+}
+
+/**
+ * 見出し行を書きます。空のシートにだけ使います。
+ *
+ * @param {boolean} withSamples 見本の行も入れるか。
+ *   **シートを新しく作ったときだけ true にします。**
+ *   先生が中身を消して空にしただけのシートに見本を書き戻すと、
+ *   消したはずの「佐藤 健太」やデモの授業が、次に開いたときに戻ってきます。
+ *   先生から見れば「消えない」ので、何度も消すことになります。
+ */
+function writeHeader_(sheet, spec, withSamples) {
+  sheet.getRange(1, 1, 1, spec.header.length)
+    .setValues([spec.header])
+    .setBackground('#e8eaed')
+    .setFontWeight('bold');
+  if (!withSamples) return;
+  const rows = initialRowsOf_(spec);
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, spec.header.length).setValues(rows);
+  }
+}
+
+/**
+ * 足りないシートだけを作ります。
+ *
+ * ふつうは1枚も足りないので、その場合は**ロックを取らずに帰ります**。
+ * 40台が一斉に開く朝の会に、全員がロック待ちの行列に並ぶのを避けるためです。
+ * 先生が誤って1枚消してしまったときも、次に開いた人が作り直します。
+ * 消えた中身は戻りませんが、画面が真っ白になることは無くなります。
+ *
+ * @return {Spreadsheet} 受け取ったものをそのまま返します（呼び出し側で繋げて書けるように）
+ */
+function ensureSheets_(ss) {
+  const missing = SHEETS_.filter(function (spec) {
+    const sheet = ss.getSheetByName(spec.name);
+    return !sheet || sheet.getLastRow() === 0;
+  });
+  if (!missing.length) return ss;
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    // ロックが取れないのは、ほかの誰かが今まさに作っている最中のときです。
+    // 作りかけの表に二重に書き込むより、そのまま返して次の読み込みに任せます。
+    return ss;
+  }
+  try {
+    SHEETS_.forEach(function (spec) {
+      let sheet = ss.getSheetByName(spec.name);
+      if (sheet && sheet.getLastRow() > 0) return;   // ロックを待つ間に誰かが作っていた
+      const isNew = !sheet;
+      if (isNew) sheet = ss.insertSheet(spec.name);
+      writeHeader_(sheet, spec, isNew);
+    });
+
+    // 新しいスプレッドシートに最初からある空の「シート1」を片づけます。
+    // 中身のあるシートは消しません（先生が自分用に使っていることがあります）。
+    ['シート1', 'Sheet1'].forEach(function (name) {
+      const sheet = ss.getSheetByName(name);
+      if (sheet && sheet.getLastRow() === 0 && ss.getSheets().length > 1) {
+        try { ss.deleteSheet(sheet); } catch (e) { /* 消せなくても困りません */ }
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  return ss;
+}
+
+/**
+ * 見出し行を、実際の幅ぶん読み出します（点検と修整で同じ見方をするため）。
+ */
+function readHeaderRow_(sheet, spec) {
+  const width = Math.min(
+    Math.max(spec.header.length, sheet.getLastColumn()),
+    sheet.getMaxColumns()
+  );
+  const actual = sheet.getRange(1, 1, 1, width).getValues()[0];
+  return {
+    width: width,
+    cell: function (i) {
+      const v = actual[i];
+      return v === undefined || v === null ? '' : String(v).trim();
+    },
+  };
+}
+
+/**
+ * そのシートの列が「ずれている」かどうかを見ます。
+ * ずれているシートには、**1列も書き込みません。**
+ *
+ * ずれている証拠は2つあります。
+ *
+ *  (a) 想定の範囲に、別の言葉の見出しが入っている
+ *  (b) 想定より右に、何か入っている
+ *
+ * ⚠️ (b) を見落とすと、次の形で記録を壊します。
+ *    先生が「記録」シートの timestamp と deletedAt のあいだに1列挿すと、
+ *    見出しは […, timestamp, （空）, deletedAt] になります。
+ *    (a) だけを見ていると、空欄はずれの証拠にならないので「ずれていない」と
+ *    判断し、空いた8列目に deletedAt と書き足してしまいます。
+ *    見出しは […, timestamp, deletedAt, deletedAt] になり、
+ *    本物の削除の印は9列目に残ったままです。
+ *    アプリは削除の印を8列目（r[7]）で読むので、
+ *    **消したはずの記録が全部戻り、二重送信の判定も効かなくなります。**
+ *    しかも見出しは「正しく見える」ので、点検でも気づけません。
+ */
+function isSheetShifted_(sheet, spec) {
+  const head = readHeaderRow_(sheet, spec);
+
+  for (let i = 0; i < spec.header.length; i++) {
+    const now = head.cell(i);
+    if (now !== '' && now !== spec.header[i]) return true;      // (a)
+  }
+  for (let j = spec.header.length; j < head.width; j++) {
+    if (head.cell(j) !== '') return true;                        // (b)
+  }
+  return false;
+}
+
+/**
+ * シートの作りが SHEETS_ のとおりかを点検します。**ここでは何も書き換えません。**
+ *
+ * ⚠️ 見出しがずれていても、勝手に上書きしてはいけません。
+ *    ずれているのは見出しではなく**中身のほう**なので、見出しだけ正しくすると
+ *    「間違った列に正しいラベルが付いた」状態になり、事故が見えなくなります。
+ *    どこがどうずれているかを言うだけにして、直すのは人の仕事にします。
+ *
+ * @return {{sheet: string, kind: string, detail: string, fixable: boolean}[]}
+ *         見つかったもの。想定どおりなら空の配列。
+ */
+function checkSheets_(ss) {
+  const found = [];
+
+  SHEETS_.forEach(function (spec) {
+    const sheet = ss.getSheetByName(spec.name);
+    if (!sheet) {
+      found.push({ sheet: spec.name, kind: 'シートが無い', detail: '「' + spec.name + '」シートがありません', fixable: true });
+      return;
+    }
+    if (sheet.getLastRow() === 0) {
+      found.push({ sheet: spec.name, kind: '見出しが無い', detail: '1行目が空です', fixable: true });
+      return;
+    }
+
+    const head = readHeaderRow_(sheet, spec);
+    const width = head.width;
+    const cell = head.cell;
+    const hasRows = sheet.getLastRow() > 1;
+
+    // このシートの列がずれているなら、**1列も直しません**（isSheetShifted_ 参照）。
+    // ここで「直せます」と言っておきながら repairSheets_ が何もしないと、
+    // 先生は直すつもりで OK を押したのに「直せるところはありませんでした」と
+    // 言われることになります。同じ判断を両方で使います。
+    const shifted = isSheetShifted_(sheet, spec);
+
+    // (1) 見出しが違う列
+    const wrong = [];
+    const blank = [];
+    for (let i = 0; i < spec.header.length; i++) {
+      if (cell(i) === spec.header[i]) continue;
+      if (cell(i) === '') blank.push(i); else wrong.push(i);
+    }
+
+    // 空欄の見出しは、その列に**データが1つも無く**、かつ
+    // **シート全体がずれていないとき**だけ書き足せます。
+    blank.forEach(function (i) {
+      const dirty = hasRows && columnHasValue_(sheet, i + 1);
+      const why = shifted ? '（このシートは列がずれているので、自動では直しません）'
+        : dirty ? '（この列にデータが入っているので、自動では直しません）' : '';
+      found.push({
+        sheet: spec.name,
+        kind: '見出しが空',
+        detail: (i + 1) + '列目が「' + spec.header[i] + '」のはずが空です' + why,
+        fixable: !dirty && !shifted,
+      });
+    });
+
+    if (wrong.length) {
+      const at = wrong[0];
+      found.push({
+        sheet: spec.name,
+        kind: '見出しがちがう',
+        detail: (at + 1) + '列目が「' + spec.header[at] + '」のはずが「' + cell(at) + '」になっています'
+          + (wrong.length > 1 ? '（ほか ' + (wrong.length - 1) + ' 列もずれています）' : ''),
+        fixable: false,
+      });
+    }
+
+    // (2) 想定より右にある列。読み書きでは無視していますが、列を挿した跡のことがあります。
+    const extra = [];
+    for (let j = spec.header.length; j < width; j++) {
+      if (cell(j) !== '') extra.push(cell(j));
+    }
+    if (extra.length) {
+      found.push({
+        sheet: spec.name,
+        kind: '列が多い',
+        detail: (spec.header.length + 1) + '列目から先に「' + extra.join('」「') + '」があります',
+        fixable: false,
+      });
+    }
+  });
+
+  return found;
+}
+
+/** その列（1始まり）に、見出し行より下で何か入っているかを見ます。 */
+function columnHasValue_(sheet, column) {
+  const rows = sheet.getLastRow() - 1;
+  if (rows <= 0) return false;
+  if (column > sheet.getMaxColumns()) return false;
+  return sheet.getRange(2, column, rows, 1).getValues()
+    .some(function (r) { return String(r[0] === undefined || r[0] === null ? '' : r[0]).trim() !== ''; });
+}
+
+/**
+ * 点検で見つかったもののうち、**安全に直せるものだけ**を直します。
+ *
+ * 直すもの:
+ *   ・シートが丸ごと無い     → 見出しを付けて作る
+ *   ・1行目が空             → 見出しを書く
+ *   ・見出しが空欄で、その列にデータが1つも無い → 見出しを書き足す
+ *     （アプリの更新で列が増えたときが、これに当たります）
+ *
+ * 直さないもの:
+ *   ・見出しが別の言葉になっている → 列がずれた跡です。上書きすると事故が隠れます
+ *   ・想定より右に列がある         → 先生が自分用に足した列かもしれません
+ *
+ * @return {{fixed: string[], left: object[]}} 直したものと、人に任せたもの
+ */
+function repairSheets_(ss) {
+  const fixed = [];
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('ほかの人が同時に使っています。少し待ってからもう一度おためしください。');
+  }
+  try {
+    SHEETS_.forEach(function (spec) {
+      let sheet = ss.getSheetByName(spec.name);
+
+      if (!sheet) {
+        sheet = ss.insertSheet(spec.name);
+        writeHeader_(sheet, spec, true);
+        fixed.push('「' + spec.name + '」シートを作りました');
+        return;
+      }
+      if (sheet.getLastRow() === 0) {
+        // 見出しだけを書きます。見本の行は入れません
+        // （中身を消して空にしただけかもしれないので、勝手に足しません）。
+        writeHeader_(sheet, spec, false);
+        fixed.push('「' + spec.name + '」の見出しを書きました');
+        return;
+      }
+
+      // 見出しが空欄で、その列にデータが無いものだけ書き足します。
+      if (sheet.getMaxColumns() < spec.header.length) {
+        sheet.insertColumnsAfter(sheet.getMaxColumns(), spec.header.length - sheet.getMaxColumns());
+      }
+      // ⚠️ このシートの列がずれていたら、**1列も触りません**（isSheetShifted_ 参照）。
+      //    ずれているシートは、人が中身を見て直すしかありません。
+      if (isSheetShifted_(sheet, spec)) return;
+
+      const readCell = readHeaderRow_(sheet, spec).cell;
+      for (let i = 0; i < spec.header.length; i++) {
+        const now = readCell(i);
+        if (now === spec.header[i]) continue;
+        if (now !== '') continue;                       // 別の言葉が入っている → 触らない
+        if (columnHasValue_(sheet, i + 1)) continue;    // データがある → 触らない
+        sheet.getRange(1, i + 1)
+          .setValue(spec.header[i])
+          .setBackground('#e8eaed')
+          .setFontWeight('bold');
+        fixed.push('「' + spec.name + '」の' + (i + 1) + '列目に見出し「' + spec.header[i] + '」を書き足しました');
+      }
+    });
+  } finally {
+    lock.releaseLock();
   }
 
-  // 3. 授業シート
-  let sessionSheet = ss.getSheetByName('授業');
-  if (!sessionSheet) {
-    sessionSheet = ss.insertSheet('授業');
-    sessionSheet.getRange(1, 1, 1, 8).setValues([['sessionId', 'date', 'title', 'inputType', 'options', 'status', 'phase', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
-    // デモセッション
-    const demoOptions = JSON.stringify({minLabel: '正直に言う', maxLabel: '黙っている', tags: ['葛藤', '不安', '決意']});
-    sessionSheet.getRange(2, 1, 1, 8).setValues([
-      ['demo_01', new Date(), '正直な心（デモ）', 'SLIDER', demoOptions, 'ACTIVE', 'BEFORE', '']
-    ]);
+  return { fixed: fixed, left: checkSheets_(ss) };
+}
+
+/**
+ * このアプリがデータを読み書きする表計算ファイルを返します。
+ *
+ * ■ いまの配り方（コンテナバインド）
+ *   スプレッドシートのコピーを配り、そのファイルにこのスクリプトが束ねられています。
+ *   束ねられているファイルがそのままデータベースなので、IDの控えも自動生成も要りません。
+ *   先生は「どこにできたのか」を探さなくてよく、いま開いているそのファイルが中身です。
+ *
+ * ■ 前の配り方（独立スクリプト）ですでに公開している学級
+ *   script.new で作った独立スクリプトには束ねられたファイルが無く、
+ *   getActiveSpreadsheet() は null を返します。その学級ではこれまでどおり
+ *   スクリプトプロパティ DB_ID の表計算ファイルを開きます。
+ *   **ここを消すと、すでに使っている学級の記録が見えなくなります。**
+ *
+ * 【自己修復について】
+ * 以前はここで「開けなかったら新しく作り直す」ことをしていました。やめました。
+ * その形は、権限が足りない人が1回開いただけで、学級全員の記録が入ったファイルから
+ * 空のファイルへ静かに差し替わります。画面には何も出ず「記録が消えた」ようにしか
+ * 見えません。**開けないときは、作り直さずにその理由を出して止まります。**
+ */
+function getDB() {
+  const bound = getBoundSpreadsheet_();
+  if (bound) return ensureSheets_(bound);
+
+  const dbId = SCRIPT_PROP.getProperty('DB_ID');
+  if (dbId) {
+    try {
+      return ensureSheets_(SpreadsheetApp.openById(dbId));
+    } catch (e) {
+      console.error('DB_ID のスプレッドシートを開けませんでした。', e);
+      throw new Error(
+        'データを入れている表計算ファイルを開けませんでした。'
+        + 'ファイルが削除されたか、開く権限がありません。'
+        + '（作り直すと、これまでの記録が見えなくなるため、自動では作りません。'
+        + '先生の方は、スクリプトのプロパティ DB_ID をご確認ください）'
+      );
+    }
   }
 
-  // 4. 記録シート
-  let logSheet = ss.getSheetByName('記録');
-  if (!logSheet) {
-    logSheet = ss.insertSheet('記録');
-    logSheet.getRange(1, 1, 1, 8).setValues([['logId', 'sessionId', 'studentId', 'phase', 'value', 'text', 'timestamp', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
+  throw new Error(
+    'データを入れる表計算ファイルが見つかりません。'
+    + 'このアプリは、配布されたスプレッドシートのコピーの中で動かしてください。'
+    + '（スプレッドシートを開き、「拡張機能」＞「Apps Script」からデプロイした URL をお使いください）'
+  );
+}
+
+/**
+ * このスクリプトが束ねられているスプレッドシートを返します。
+ * 独立スクリプトとして動いている場合は null を返します。
+ */
+function getBoundSpreadsheet_() {
+  try {
+    return SpreadsheetApp.getActiveSpreadsheet() || null;
+  } catch (e) {
+    return null;   // 独立スクリプトでは例外になる版があります
+  }
+}
+
+// -----------------------------------------------------------------
+// 3b. スプレッドシートのメニュー（コンテナバインドのときだけ出ます）
+// -----------------------------------------------------------------
+
+/**
+ * スプレッドシートを開いたときに、上に「こころスコープ」メニューを作ります。
+ * ウェブアプリとして動いているときは画面が無いので、何もしません。
+ */
+function onOpen(e) {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu(APP_NAME)
+      .addItem('シートを点検する', 'showSheetCheck')
+      .addItem('直せるところを直す', 'showSheetRepair')
+      .addToUi();
+  } catch (err) {
+    // ウェブアプリ文脈では画面が無い。ここに来て構わない。
+  }
+}
+
+/**
+ * メニュー「シートを点検する」から呼びます。**何も書き換えません。**
+ *
+ * ⚠️ google.script.run は末尾 `_` の無い関数を誰でも直接呼べます。この関数も
+ *    児童から呼べてしまうので、**1行目で getUi() を取ります**。
+ *    ウェブアプリ文脈では画面が無いためここで例外になり、
+ *    シートを1枚も読まずに終わります。
+ *    なお返す内容は見出しの並びだけで、児童の記述や氏名は含みません。
+ */
+function showSheetCheck() {
+  const ui = SpreadsheetApp.getUi();   // 画面が無ければ、ここで止まります
+  const found = checkSheets_(getDB());
+  ui.alert('シートの点検', describeFindings_(found), ui.ButtonSet.OK);
+}
+
+/**
+ * メニュー「直せるところを直す」から呼びます。
+ * 安全に直せるものだけを直し、残りは人に任せます。
+ *
+ * ⚠️ showSheetCheck と同じ理由で、1行目で getUi() を取ります。
+ *    書き換えを伴うので、実行前に必ず確認を取ります。
+ */
+function showSheetRepair() {
+  const ui = SpreadsheetApp.getUi();   // 画面が無ければ、ここで止まります
+  const ss = getDB();
+
+  const before = checkSheets_(ss);
+  const fixable = before.filter(function (f) { return f.fixable; });
+  if (!before.length) {
+    ui.alert('シートの点検', 'シートの作りは想定どおりです。直すところはありません。', ui.ButtonSet.OK);
+    return;
+  }
+  if (!fixable.length) {
+    ui.alert(
+      'シートの点検',
+      describeFindings_(before) + '\n\nこれらは自動では直せません。上の説明のとおりに、手で直してください。',
+      ui.ButtonSet.OK
+    );
+    return;
   }
 
-  // 5. 単元シート (Unit Management)
-  let unitSheet = ss.getSheetByName('単元');
-  if (!unitSheet) {
-    unitSheet = ss.insertSheet('単元');
-    unitSheet.getRange(1, 1, 1, 7).setValues([['unitId', 'title', 'inputType', 'options', 'memo', 'createdAt', 'deletedAt']]).setBackground('#e8eaed').setFontWeight('bold');
-  }
+  const answer = ui.alert(
+    'シートを直します',
+    '次のところを直します。\n\n'
+      + fixable.map(function (f) { return '・「' + f.sheet + '」' + f.detail; }).join('\n')
+      + '\n\n直してよろしいですか。',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (answer !== ui.Button.OK) return;
 
-  // デフォルトシートの削除
-  const sheet1 = ss.getSheetByName('シート1');
-  if (sheet1) {
-    try { ss.deleteSheet(sheet1); } catch(e) {}
-  }
+  const result = repairSheets_(ss);
+  const text = (result.fixed.length ? '直しました。\n\n' + result.fixed.map(function (m) { return '・' + m; }).join('\n') : '直せるところはありませんでした。')
+    + '\n\n' + describeFindings_(result.left);
+  ui.alert('シートの点検', text, ui.ButtonSet.OK);
+}
+
+/** 点検の結果を、先生に読める日本語にします。 */
+function describeFindings_(found) {
+  if (!found.length) return 'シートの作りは想定どおりです。';
+  return '次のところが、アプリの想定と違います。\n\n'
+    + found.map(function (f) { return '・「' + f.sheet + '」' + f.kind + '：' + f.detail; }).join('\n')
+    + '\n\n列の並びは変えないでください。'
+    + '児童ID・数値・削除の印は、列の「番号」で読み書きしています。'
+    + '列を挿したり並べ替えたりすると、散布図がずれたり、'
+    + '消したはずの記録が戻ったりします。';
 }
 
 // =================================================================
@@ -651,29 +1093,52 @@ function submitLog(data) {
   const safeText = sanitizeText(data.text);
   const safeValue = String(data.value || '').substring(0, MAX_VALUE_LENGTH);
 
-  // 重複送信チェック
   const logSheet = ss.getSheetByName('記録');
-  if (logSheet && logSheet.getLastRow() > 1) {
-    const existing = logSheet.getDataRange().getValues().slice(1)
-      .find(r => r[1] === data.sessionId && r[2] === data.studentId && r[3] === data.phase && !r[7]);
-    if (existing) {
-      return { success: false, error: 'すでにこのフェーズで送信済みです', duplicate: true };
-    }
+  if (!logSheet) {
+    return { success: false, error: '「記録」シートがありません。先生にお知らせください。' };
   }
 
+  // 【なぜロックで囲むのか】
+  // 道徳の授業では、40人が「送信」をほぼ同時に押します。
+  // ロックが無いと、重複の確認をした人と、行を足す人が入れ替わります。
+  //   児童A: 重複を確認 → 無い
+  //   児童A（もう一度押した）: 重複を確認 → まだ無い（1回目がまだ書けていない）
+  //   → 同じ児童の BEFORE が2行入る
+  // こうなると散布図が二重点になり、変容の集計が壊れます。
+  // 「すでに送信済みです」も出ないので、**誰も気づきません。**
+  //
+  // 囲む範囲は「重複の確認 → 1行足す」だけに絞ります。
+  // 名簿の照合や入力の検査は上で済ませてあり、ロックの外です。
   const logId = Utilities.getUuid();
-  const timestamp = new Date();
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    return { success: false, error: 'いま混み合っています。少し待ってから、もう一度送信してください。' };
+  }
+  try {
+    if (logSheet.getLastRow() > 1) {
+      const existing = logSheet.getDataRange().getValues().slice(1)
+        .find(r => r[1] === data.sessionId && r[2] === data.studentId && r[3] === data.phase && !r[7]);
+      if (existing) {
+        return { success: false, error: 'すでにこのフェーズで送信済みです', duplicate: true };
+      }
+    }
 
-  logSheet.appendRow([
-    logId,
-    data.sessionId,
-    data.studentId,
-    data.phase,
-    safeValue,
-    safeText,
-    timestamp,
-    ''
-  ]);
+    logSheet.appendRow([
+      logId,
+      data.sessionId,
+      data.studentId,
+      data.phase,
+      safeValue,
+      safeText,
+      new Date(),
+      ''
+    ]);
+    SpreadsheetApp.flush();   // ロックを離す前に、確実に書き込んでおく
+  } finally {
+    lock.releaseLock();
+  }
 
   return { success: true, logId: logId };
 }
@@ -763,6 +1228,22 @@ function getStudentPortfolio(studentId) {
  */
 function getAnonymousOpinions(sessionId) {
   const ss = getDB();
+
+  // 【この関数について】
+  // これは児童も呼ぶ機能です（入力画面の「みんなの考えを見る」）。
+  // 名前を伏せた記述を並べて、教室で読み合うために作ってあります。
+  //
+  // ⚠️ 以前は sessionId を受け取ったまま何も確かめずに引いていました。
+  //    google.script.run は誰でも直接呼べるので、児童がコンソールから
+  //    **過去のどの授業の記述本文でも**引けてしまいます。
+  //    道徳の記述には、家庭のことや友だちとのもめごとが書かれます。
+  //    卒業した学年のぶんまで、名前は伏せられていても本文は全部読めました。
+  //
+  //    いまは「いま開いている授業」に限ります。先生は授業の一覧から
+  //    どれでも見られます（getSessionLogs / getStudentSummaries は
+  //    assertTeacher_ を通ります）。
+  assertActiveSessionOrTeacher_(ss, sessionId);
+
   const sheet = ss.getSheetByName('記録');
   if (!sheet) return [];
   
@@ -1076,8 +1557,17 @@ function saveGeminiApiKey(apiKey) {
  * エディタ上でこの関数を選択して実行すると、必要な権限の承認画面が表示されます。
  * あわせて、実行した人のメールアドレスを OWNER_EMAIL に記録します。
  */
-function forceAuth() {
-  rememberOwnerEmail_();
+/**
+ * 必要な権限の同意画面を、先生にまとめて出させるための関数です。
+ *
+ * ⚠️ 末尾に `_` が付いているのは、google.script.run から呼ばせないためです。
+ *    以前は `forceAuth`（`_` 無し）で、しかも1行目が rememberOwnerEmail_() でした。
+ *    **児童がブラウザのコンソールから `runGoogleScript('forceAuth')` と打つだけで、
+ *    その児童が恒久的に先生になれました。**
+ *    manualSetup と同じ穴が、こちらにだけ残っていました。
+ *    OWNER_EMAIL を記録するのは manualSetup の仕事なので、ここではしません。
+ */
+function forceAuth_() {
   SpreadsheetApp.getActiveSpreadsheet();
   Session.getActiveUser().getEmail();
   UrlFetchApp.fetch("https://www.google.com");
@@ -1319,7 +1809,12 @@ function hasTeacherPassword() {
 }
 
 
-function getParentFolderId(folder) {
+/**
+ * 【この関数について】
+ * どこからも呼ばれていませんが、末尾に `_` を付けて非公開にしてあります。
+ * google.script.run は末尾 `_` の無い関数を誰でも直接呼べるためです。
+ */
+function getParentFolderId_(folder) {
   try {
     const parents = folder.getParents();
     if (parents.hasNext()) return parents.next().getId();
@@ -1336,10 +1831,49 @@ function getParentFolderId(folder) {
  * （先生が複数いる場合は、スクリプトプロパティ TEACHER_EMAILS にカンマ区切りで登録してください）
  */
 function manualSetup() {
+  // ⚠️ この関数は末尾に `_` が無いので、google.script.run から誰でも呼べます。
+  //    以前はここが「まだ OWNER_EMAIL が無ければ、呼んだ人を先生にする」形でした。
+  //    スプレッドシートのコピーで配る今の形では、先生の手元に届くコピーは
+  //    毎回 OWNER_EMAIL が空です。先生がデプロイして URL を配ったあと、
+  //    先生より先に児童がこれを呼ぶと、**その児童が恒久的に先生になります**
+  //    （取り消すにはスクリプトのプロパティを手で書き換えるしかありません）。
+  //
+  //    そこで「呼んだ人が、このアプリを公開した本人であること」を先に確かめます。
+  //    スクリプトエディタから先生が実行したときは、両方とも先生自身になるので通ります。
+  //    児童のブラウザから呼ばれたときは、実行ユーザー（先生）と
+  //    アクセスユーザー（児童）が食い違うので、ここで止まります。
+  const caller = getCallerEmail_();
+  const deployer = getDeployerEmail_();
+  if (!caller || !deployer || caller !== deployer) {
+    throw new Error('この操作は、このアプリを公開したご本人だけが実行できます。'
+      + 'スクリプトエディタから manualSetup を実行してください。');
+  }
+
   try {
     const owner = rememberOwnerEmail_();
+
+    // 必要な権限の同意を、ここでまとめて出します。
+    // 校内から外部への通信が塞がれていると最後の1つで失敗しますが、
+    // 生成AIを使わなければ困らないので、止めずに知らせるだけにします。
+    try {
+      forceAuth_();
+    } catch (authError) {
+      console.warn('⚠ 外部への通信を確かめられませんでした（生成AIを使わないなら問題ありません）:', authError);
+    }
+
     const ss = getDB();
-    console.log("✅ セットアップ完了！ DB ID:", ss.getId());
+    console.log("✅ セットアップ完了！ 使用中のスプレッドシート:", ss.getName());
+    console.log("📄 このスクリプトが束ねられているファイルか:", getBoundSpreadsheet_() ? "はい（コンテナバインド）" : "いいえ（独立スクリプト）");
+
+    const found = checkSheets_(ss);
+    if (found.length) {
+      console.warn("⚠ シートの作りが想定と違います:");
+      found.forEach(function (f) { console.warn('  ・「' + f.sheet + '」' + f.kind + '：' + f.detail); });
+      console.warn("  スプレッドシートの「" + APP_NAME + "」メニュー＞「直せるところを直す」でお試しください。");
+    } else {
+      console.log("✅ シートの作りは想定どおりです。");
+    }
+
     if (owner) {
       console.log("👤 管理者(OWNER_EMAIL)として登録されました:", owner);
     } else {
@@ -1347,5 +1881,6 @@ function manualSetup() {
     }
   } catch(e) {
     console.error("セットアップ失敗:", e);
+    throw e;   // 画面にも出す（以前は握りつぶしていたので、失敗が成功に見えていました）
   }
 }
