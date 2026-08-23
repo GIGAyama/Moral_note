@@ -307,7 +307,12 @@ function assertSafeToPush() {
   const inGas = listFiles(BACKUP_DIR);
   // .claspignore で外したファイルは「送らない」ので、リポジトリにあっても
   // 数に入れてはいけない。入れると、同じ名前のものが本番から黙って消える。
-  const ignoreFile = path.join(src, '.claspignore');
+  //
+  // ⚠️ .claspignore は **リポジトリ直下**（clasp を動かす場所）から読む。
+  //    src（GAS_ROOT_DIR で下げた先）から読むと、GAS_ROOT_DIR を使っている
+  //    リポジトリでファイルが見つからず、絞り込みが丸ごと効かなくなる。
+  //    そこは clasp 自身の見方に合わせる。
+  const ignoreFile = path.join(rootDir, '.claspignore');
   const ignoreText = fs.existsSync(ignoreFile) ? fs.readFileSync(ignoreFile, 'utf8') : null;
   const inRepo = filesToPush(listFiles(src), ignoreText)
     .filter(f => /\.(gs|html|json)$/i.test(f));
