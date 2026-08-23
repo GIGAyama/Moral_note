@@ -186,6 +186,87 @@ function listFiles(dir) {
 }
 
 /**
+ * `.claspignore` の1行をふるいの規則に直します。
+ *
+ * 対応するのは、この一群のリポジトリで実際に使っている書き方だけです。
+ *   `**` … 区切りをまたいで何文字でも
+ *   `*`  … 区切りをまたがずに何文字でも
+ *   `!`  … 先頭に付けると「戻す」
+ *   `#`  … 行頭のコメント
+ *
+ * **知らない書き方は、分かったふりをせず例外にします。**
+ * ここで黙って素通りさせると「送らないのに安全と数える」という、
+ * いま直しているのと同じ穴が別の形で開きます。
+ */
+export function claspIgnoreRule(line) {
+  const negate = line.startsWith('!');
+  const body = negate ? line.slice(1) : line;
+  if (/[?\[\]{}()+^$]/.test(body)) {
+    throw new Error(`.claspignore の書き方が読み取れません: ${line}`);
+  }
+  // 1文字ずつ見る。まとめて置きかえると `**/**` の扱いを取り違える
+  // （区切りの前後を「必ず1つ以上」と読んでしまい、直下のファイルが外れる）。
+  let source = '^';
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '*') {
+      if (body[i + 1] === '*') {
+        if (body[i + 2] === '/') {
+          source += '(?:.*\\/)?';   // `**/` … どの階層でもよい（無くてもよい）
+          i += 2;
+        } else {
+          source += '.*';           // `**`  … 区切りをまたいで何文字でも
+          i += 1;
+        }
+      } else {
+        source += '[^/]*';          // `*`   … 区切りをまたがずに何文字でも
+      }
+    } else if (ch === '/') {
+      source += '\\/';
+    } else if (ch === '.' || ch === '\\') {
+      source += '\\' + ch;
+    } else {
+      source += ch;
+    }
+  }
+  return { negate, re: new RegExp(source + '$') };
+}
+
+/**
+ * `clasp push` が実際に送るファイルだけに絞ります。
+ *
+ * ⚠️ ここを飛ばすと、**送らないファイルを「リポジトリにある」と数えて**しまいます。
+ *    実例（2026-08-23・haiku-meeting）: リポジトリの `index.html` はサイトの
+ *    トップで、`.claspignore` で外してあります。それでも名前が同じというだけで
+ *    「安全」と数え、**本番の index.html が警告なしに消える**ところでした。
+ *
+ * 規則は gitignore と同じく **あとに書いたものが勝ちます**。
+ * `.claspignore` が無いときは clasp の既定に任せるので、絞り込みもしません。
+ *
+ * @param {string[]} files      リポジトリにあるファイル（相対パス）
+ * @param {?string} ignoreText  .claspignore の中身。無ければ null
+ * @returns {string[]} 送るファイル
+ */
+export function filesToPush(files, ignoreText) {
+  if (ignoreText === null || ignoreText === undefined) return files;
+  const rules = ignoreText
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'))
+    .map(claspIgnoreRule);
+  if (rules.length === 0) return files;
+
+  return files.filter(file => {
+    const target = file.split(path.sep).join('/');
+    let ignored = false;
+    for (const rule of rules) {
+      if (rule.re.test(target)) ignored = !rule.negate;
+    }
+    return !ignored;
+  });
+}
+
+/**
  * 「送ると GAS から消えるファイル」を洗い出します。
  *
  * `clasp push --force` は GAS 側を丸ごと置き換えます。GASエディタで直接
@@ -224,7 +305,12 @@ function backup(scriptId, authFile) {
 function assertSafeToPush() {
   const src = path.join(rootDir, projectRootDir());
   const inGas = listFiles(BACKUP_DIR);
-  const inRepo = listFiles(src).filter(f => /\.(gs|html|json)$/i.test(f));
+  // .claspignore で外したファイルは「送らない」ので、リポジトリにあっても
+  // 数に入れてはいけない。入れると、同じ名前のものが本番から黙って消える。
+  const ignoreFile = path.join(src, '.claspignore');
+  const ignoreText = fs.existsSync(ignoreFile) ? fs.readFileSync(ignoreFile, 'utf8') : null;
+  const inRepo = filesToPush(listFiles(src), ignoreText)
+    .filter(f => /\.(gs|html|json)$/i.test(f));
 
   if (inGas.length === 0) {
     console.log('控えが空でした。まだ中身の無いGASプロジェクトとみなして先へ進みます。');
