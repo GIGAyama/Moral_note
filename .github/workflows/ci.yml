@@ -1,12 +1,15 @@
 # =====================================================================
 # ci.yml — このリポジトリの最低限の点検
 # =====================================================================
-# このリポジトリは GAS の .gs と、GAS テンプレートの .html だけでできて
-# いて、ビルドもテストも持たない。それでも次の2つは機械で見ておきたい:
+# このリポジトリは GAS の .gs と、GAS テンプレートの .html でできている。
+# 機械で見ておきたいのは次の2つ:
 #
-#   1. syntax — .gs が構文として壊れていないか。GAS は貼り付けて保存する
-#      まで誤りに気づけないので、その前に落とす。
-#   2. drift  — Gemini.gs が正本（GIGAyama.github.io/standards/gas/）から
+#   1. check  — npm run check。.gs の構文、GAS へ送るファイルの配線、
+#      公開エンドポイントの数、appsscript.json、案内ページ、そして
+#      シートの点検・修整のテスト（tests/）。
+#      **deploy.yml が本番へ反映する前に回すのと同じ指示**なので、
+#      ここが緑なら反映も止まらない。
+#   2. drift  — Gemini.gs などが正本（GIGAyama.github.io/standards/gas/）から
 #      ずれていないか。正本を直したのにこのコピーだけ古いまま、を防ぐ。
 #
 # .html は GAS のテンプレート（<?= ?> を含みうる）なので構文検査の対象外。
@@ -23,24 +26,17 @@ permissions:
   contents: read
 
 jobs:
-  syntax:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: .gs の構文検査
-        run: |
-          set -e
-          fail=0
-          # node は .gs 拡張子を知らないので、.js として写してから見る
-          for f in *.gs; do
-            [ -e "$f" ] || continue
-            cp "$f" "/tmp/$(basename "$f").js"
-            node --check "/tmp/$(basename "$f").js" || fail=1
-          done
-          exit $fail
+      # 依存パッケージは無い（scripts/ も tests/ も Node の標準機能だけで動く）。
+      # npm ci を回さないのは、入れるものが何も無いから。
+      - name: 点検（構文・配線・公開関数・案内ページ・シートのテスト）
+        run: npm run check
 
   # 正本（GIGAyama.github.io/standards/）からコピーしたファイルが、
   # 正本の更新に取り残されていないかを見る。standards-map.json が対応表。

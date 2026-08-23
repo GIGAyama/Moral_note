@@ -11,10 +11,14 @@
 #
 # .gs を足したときは何もしなくても送られます。.html を足したときは
 # ここに1行足してください。npm run gas:status で確かめられます。
+#
+# ⚠️ index.html は **GAS へ送りません**。あれは moral-note.giga-school.com に
+#    出す導入案内のページです。GAS の画面の外枠は app-shell.html です
+#    （code.gs の doGet がこの名前を読みます）。
 **/**
 !appsscript.json
 !*.gs
 !css.html
-!index.html
+!app-shell.html
 !js.html
 !js_patterns.html

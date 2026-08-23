@@ -4,6 +4,9 @@
   "private": true,
   "license": "MIT",
   "scripts": {
+    "check": "npm run gas:syntax && node scripts/check-project.mjs && npm test",
+    "test": "node --test tests/*.test.mjs",
+    "gas:syntax": "node scripts/check-syntax.mjs",
     "gas:install": "npm install --no-save --no-package-lock --no-audit --no-fund @google/clasp@3.3.0",
     "gas:login": "node scripts/gas-deploy.mjs login",
     "gas:status": "node scripts/gas-deploy.mjs status",
