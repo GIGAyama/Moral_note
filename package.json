@@ -12,6 +12,16 @@
     "gas:status": "node scripts/gas-deploy.mjs status",
     "gas:backup": "node scripts/gas-deploy.mjs backup",
     "gas:push": "node scripts/gas-deploy.mjs push",
-    "deploy": "node scripts/gas-deploy.mjs deploy"
+    "deploy": "node scripts/gas-deploy.mjs deploy",
+    "build": "node tools/vendor/build-vendor.mjs",
+    "build:fonts": "node tools/fonts/build-fonts.mjs",
+    "verify": "node tools/vendor/verify-generated.mjs",
+    "ci": "npm run build && npm run verify && npm run check"
+  },
+  "dependencies": {
+    "bootstrap": "5.3.0",
+    "bootstrap-icons": "1.10.5",
+    "chart.js": "4.5.1",
+    "sweetalert2": "11.26.25"
   }
 }
