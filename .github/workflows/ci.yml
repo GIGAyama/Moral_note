@@ -38,6 +38,25 @@ jobs:
       - name: 点検（構文・配線・公開関数・案内ページ・シートのテスト）
         run: npm run check
 
+  # 生成物が原本と食い違っていないか。
+  # ライブラリを自己ホストにしたので、原本（vendor.config.json / src/app.jsx など）を
+  # 直したのに npm run build を忘れると、リポジトリの中身だけが古いまま残る。
+  # 構文検査もスキル照合も通ってしまい、貼り付けて動かすまで気づけない。
+  #
+  # ⚠️ 検査はコミットされている中身と比べる。前に build を走らせても結果は変わらない
+  #    （作業ツリーと比べていたころは、build を先に置くだけで必ず緑になった）。
+  generated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 生成物が原本と一致しているか
+        run: npm run ci
+
   # 正本（GIGAyama.github.io/standards/）からコピーしたファイルが、
   # 正本の更新に取り残されていないかを見る。standards-map.json が対応表。
   drift:
