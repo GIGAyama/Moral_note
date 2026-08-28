@@ -22,3 +22,9 @@
 !app-shell.html
 !js.html
 !js_patterns.html
+# 取りこんだライブラリと書体（生成物）。css.html と app-shell.html が
+# include() で読むので、送らないと GAS 側で「中身が空」になります。
+!vendor_css.html
+!vendor_icons.html
+!vendor_js.html
+!fonts.html

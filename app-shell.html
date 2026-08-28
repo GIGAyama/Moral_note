@@ -137,7 +137,11 @@
     <!-- View: Waiting -->
     <div id="view-waiting" class="d-none text-center mt-3 fade-in student-view-container">
       <div class="d-flex flex-column justify-content-center align-items-center h-100">
-        <img src="https://cdn-icons-png.flaticon.com/512/7486/7486744.png" width="150" class="mb-4 opacity-50">
+        <!-- 待っているあいだの絵。以前は外部の CDN から PNG を取っていましたが、
+             学校のフィルタが塞ぐと児童には「画像が壊れた印」だけが出ていました。
+             取りこみ済みのアイコンに替えてあります（見た目の役だけなので
+             aria-hidden。すぐ下の見出しが同じことを文字で言っています）。 -->
+        <i class="bi bi-hourglass-split mb-4 opacity-50" style="font-size:150px" aria-hidden="true"></i>
         <h2 class="mb-4 display-6 fw-bold"><ruby>先生<rt>せんせい</rt></ruby>の<ruby>合図<rt>あいず</rt></ruby>を<ruby>待<rt>ま</rt>
           </ruby>ってね</h2>
         <p class="text-muted fs-4"><ruby>今<rt>いま</rt></ruby>は<ruby>授業<rt>じゅぎょう</rt></ruby>が<ruby>始<rt>はじ</rt>
@@ -844,10 +848,8 @@
         class="text-decoration-none text-muted">GIGA山</a></small>
   </footer>
 
-  <!-- Bootstrap & Chart.js -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Bootstrap / SweetAlert2 / Chart.js（自己ホスト。vendor.config.json で版を固定） -->
+  <?!= include('vendor_js'); ?>
 
 
   <?!= include('js_patterns'); ?>

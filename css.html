@@ -1,8 +1,19 @@
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+<!--
+  === ライブラリと書体（すべて自己ホスト）===
+  生成物です。作り直すには npm ci && npm run build（書体は npm run build:fonts）。
+
+  ⚠️ ここに CDN への <link> / <script> を戻さないこと。
+     学校のフィルタが塞ぐと、白い画面ではなく
+     「Bootstrap が当たっていない素の HTML が半分だけ動く」形で壊れます。
+     Swal と Chart が undefined になり、児童からは「壊れている」としか見えません。
+     原因はアプリの外にあるので、先生が調べても分かりません。
+
+  ⚠️ 書体の収録は 500 の 1 ウェイトだけです。太字は端末側の擬似ボールドになります。
+     先生や児童が入力した字は収録できず、端末フォントに落ちます（豆腐にはなりません）。
+-->
+<?!= include('vendor_css'); ?>
+<?!= include('vendor_icons'); ?>
+<?!= include('fonts'); ?>
 
 <style>
   body {
