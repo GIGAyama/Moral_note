@@ -28,3 +28,7 @@
 !vendor_icons.html
 !vendor_js.html
 !fonts.html
+# 利用規約・プライバシーへの行き先を出す部品（生成物。tools/build-app-links.mjs）。
+# app-shell.html が include() で読むので、送らないと GAS の画面だけリンクが出ない。
+# しかもエラーにはならないので、開いて見るまで気づけない。
+!giga_links.html

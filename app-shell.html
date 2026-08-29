@@ -842,10 +842,25 @@
     </div>
   </div>
 
-  <!-- Footer -->
-  <footer class="text-center text-muted py-3 mt-4 border-top bg-white">
-    <small>© 2026 こころスコープ <a href="https://giga-school.com" target="_blank"
+  <!-- Footer
+       ⚠️ 1 行に収める。flex-nowrap と、クレジット側の min-width:0 の 2 つが要る。
+          nowrap だけだと、クレジットの文字列が縮まずに列を押し広げて
+          横スクロールになる。狭い画面ではクレジットが … で切れる。 -->
+  <footer class="text-center text-muted py-1 mt-4 border-top bg-white d-flex flex-nowrap justify-content-center align-items-center gap-2">
+    <small class="text-truncate" style="min-width:0;">© 2026 こころスコープ <a href="https://giga-school.com" target="_blank"
         class="text-decoration-none text-muted">GIGA山</a></small>
+    <!-- ⚠️ 行き先のリンクを手で書かないこと。中身は正本の部品
+         standards/web/giga-app-links.js（配布物 web/giga-app-links.js）が
+         この中に出す。GAS へは giga_links.html として焼き込んで送る
+         （tools/build-app-links.mjs と .claspignore）。
+         文言も並びも行き先も、あちらで決まっている。
+
+         ⚠️ <div> にしないこと。そこで改行が入ってフッターが 2 行になる。
+
+         ⚠️ 出すものは giga_links.html 側（window.GIGA_APP_LINKS）で
+            "terms,privacy" に絞ってある。まだ docs/manual/ が無く、
+            既定のまま出すと行き止まりの「つかいかた」が 1 本増えるため。 -->
+    <span data-giga-links></span>
   </footer>
 
   <!-- Bootstrap / SweetAlert2 / Chart.js（自己ホスト。vendor.config.json で版を固定） -->
@@ -854,6 +869,17 @@
 
   <?!= include('js_patterns'); ?>
   <?!= include('js'); ?>
+
+  <!--
+    利用規約・プライバシーへの行き先。中身は正本の部品
+    standards/web/giga-app-links.js（配布物 web/giga-app-links.js）です。
+    giga_links.html は tools/build-app-links.mjs が焼き込む生成物なので、
+    手で編集しないこと。
+
+    ⚠️ .claspignore に !giga_links.html が要る。送られないと、GAS の画面
+       だけリンクが出ない。エラーにはならないので、開いて見るまで気づけない。
+  -->
+  <?!= include('giga_links'); ?>
 </body>
 
 </html>
