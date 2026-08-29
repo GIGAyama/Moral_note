@@ -59,6 +59,10 @@
     {
       "canonical": "agents/subagents/giga-migrator.md",
       "local": ".claude/agents/giga-migrator.md"
+    },
+    {
+      "canonical": "web/giga-app-links.js",
+      "local": "web/giga-app-links.js"
     }
   ],
   "dirs": [
