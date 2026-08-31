@@ -63,6 +63,10 @@
     {
       "canonical": "web/giga-app-links.js",
       "local": "web/giga-app-links.js"
+    },
+    {
+      "canonical": "agents/hooks/remind-changelog.mjs",
+      "local": ".claude/hooks/remind-changelog.mjs"
     }
   ],
   "dirs": [
