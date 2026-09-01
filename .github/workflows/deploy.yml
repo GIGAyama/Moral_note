@@ -38,7 +38,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check deployment secrets
         id: secrets
@@ -76,7 +76,7 @@ jobs:
 
       - name: Set up Node.js
         if: steps.secrets.outputs.ready == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
 
@@ -124,7 +124,7 @@ jobs:
 
       - name: Upload pre-push snapshot
         if: always() && steps.secrets.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gas-before-push-${{ github.sha }}
           path: dist/gas-before-push
